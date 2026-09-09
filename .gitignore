@@ -1,0 +1,28 @@
+# CLion user-specific settings
+.idea/
+
+# CMake build directories
+build/
+cmake-build-*/
+tmp/
+
+# C/C++ and embedded build artifacts
+*.o
+*.obj
+*.d
+*.dep
+*.elf
+*.hex
+*.bin
+*.map
+*.axf
+
+# Keil build artifacts
+Objects/
+Listings/
+*.uvguix.*
+*.scvd
+
+# Operating system files
+.DS_Store
+Thumbs.db
