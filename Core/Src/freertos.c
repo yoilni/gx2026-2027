@@ -21,6 +21,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "main.h"
+#include "usart.h"
 #include "cmsis_os.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -28,6 +29,9 @@
 #include "led_task.h"
 #include "M2006_task.h"
 #include "oled_task.h"
+#include "mission_task.h"
+#include "debug_uart_task.h"
+#include "start_button_task.h"
 
 /* USER CODE END Includes */
 
@@ -114,7 +118,9 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN RTOS_THREADS */
   motorTaskHandle = osThreadNew(StartMotorTask, NULL, &motorTask_attributes);
   oledTaskHandle = osThreadNew(StartOledTask, NULL, &oledTask_attributes);
-  if ((defaultTaskHandle == NULL) || (motorTaskHandle == NULL) || (oledTaskHandle == NULL))
+  if ((defaultTaskHandle == NULL) || (motorTaskHandle == NULL) ||
+      (oledTaskHandle == NULL) || !DebugUartTask_Create(&huart2) ||
+      !MissionTask_Create() || !StartButtonTask_Create())
   {
     Error_Handler();
   }

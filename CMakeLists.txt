@@ -35,7 +35,22 @@ project(${CMAKE_PROJECT_NAME})
 message("Build type: " ${CMAKE_BUILD_TYPE})
 
 # Create an executable object type
-add_executable(${CMAKE_PROJECT_NAME})
+add_executable(${CMAKE_PROJECT_NAME}
+        maixcam/maixcam_task.c
+        Debug/debug_uart_task.c
+        Debug/debug_uart_task.h
+        Task/actuator_task.c
+        Task/actuator_task.h
+        Task/mission_task.c
+        Task/mission_task.h
+        Task/start_button_task.c
+        Task/start_button_task.h
+        Task/reset_reason.c
+        Task/reset_reason.h
+        Task/servo_test_task.c
+        Task/servo_test_task.h
+        Task/robot_config.h
+        Task/uart_callback_router.c)
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
@@ -63,6 +78,9 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/M2006
     ${CMAKE_CURRENT_SOURCE_DIR}/JY901S
     ${CMAKE_CURRENT_SOURCE_DIR}/OLED
+    ${CMAKE_CURRENT_SOURCE_DIR}/maixcam
+    ${CMAKE_CURRENT_SOURCE_DIR}/Task
+    ${CMAKE_CURRENT_SOURCE_DIR}/Debug
     # Add user defined include paths
 )
 

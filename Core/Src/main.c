@@ -32,6 +32,9 @@
 #include "M2006_Speed.h"
 #include "jy901s.h"
 #include "oled_task.h"
+#include "maixcam_task.h"
+#include "reset_reason.h"
+#include "actuator_task.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -75,7 +78,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+  ResetReason_Capture();
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -108,6 +111,10 @@ int main(void)
   MX_USART6_UART_Init();
   MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
+  if (Actuator_Init() != HAL_OK)
+  {
+    Error_Handler();
+  }
   if (M2006_Init(&hcan1) != HAL_OK)
   {
     Error_Handler();
@@ -116,6 +123,12 @@ int main(void)
   HAL_NVIC_SetPriority(UART4_IRQn, 5U, 0U);
   HAL_NVIC_EnableIRQ(UART4_IRQn);
   if (JY901S_Init(&huart4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  HAL_NVIC_SetPriority(USART3_IRQn, 5U, 0U);
+  HAL_NVIC_EnableIRQ(USART3_IRQn);
+  if (MaixCam_Init(&huart3) != HAL_OK)
   {
     Error_Handler();
   }

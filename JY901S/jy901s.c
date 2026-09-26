@@ -120,13 +120,3 @@ bool JY901S_GetAttitude(JY901S_Attitude *attitude)
 
   return ((uint32_t)(HAL_GetTick() - attitude->update_tick) <= JY901S_ATTITUDE_TIMEOUT_MS);
 }
-
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-  JY901S_UART_RxCpltCallback(huart);
-}
-
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
-{
-  JY901S_UART_ErrorCallback(huart);
-}

@@ -1,79 +1,293 @@
 #include "oled_task.h"
 
 #include "cmsis_os.h"
-#include "jy901s.h"
+#include "main.h"
+#include "mission_task.h"
+#include "reset_reason.h"
+#include "robot_config.h"
 
 #define OLED_TASK_PERIOD_TICKS 200U
-#define OLED_LINE_CHARACTERS 16U
-#define JY901S_DISPLAY_UNKNOWN 0U
-#define JY901S_DISPLAY_ONLINE  1U
-#define JY901S_DISPLAY_OFFLINE 2U
 
 static uint8_t oled_ready;
-static uint8_t jy901s_display_state;
 
-static void OLED_TaskFormatAngle(char *text, const char *label, int32_t centi_degrees)
+static void OLED_TaskShowStartButton(void)
 {
-  uint8_t index = 0U;
-  uint32_t absolute_value;
-  uint32_t whole_degrees;
+  GPIO_PinState pin_state = HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_12);
 
-  while (*label != '\0')
+  (void)OLED_WriteString(0U, 0U,
+      pin_state == GPIO_PIN_SET ? "PE12:H READY    " : "PE12:L PRESSED  ");
+}
+
+static void OLED_TaskShowMission(void)
+{
+  MissionSnapshot snapshot;
+  const char *text = "MISSION:UNKNOWN ";
+
+  if (!MissionTask_GetSnapshot(&snapshot))
   {
-    text[index++] = *label++;
+    (void)OLED_WriteString(0U, 2U, text);
+    return;
   }
 
-  text[index++] = (centi_degrees < 0) ? '-' : '+';
-  absolute_value = (uint32_t)((centi_degrees < 0) ? -centi_degrees : centi_degrees);
-  whole_degrees = absolute_value / 100U;
-
-  text[index++] = (whole_degrees >= 100U) ? (char)('0' + (whole_degrees / 100U)) : ' ';
-  text[index++] = (whole_degrees >= 10U) ? (char)('0' + ((whole_degrees / 10U) % 10U)) : ' ';
-  text[index++] = (char)('0' + (whole_degrees % 10U));
-  text[index++] = '.';
-  text[index++] = (char)('0' + ((absolute_value / 10U) % 10U));
-  text[index++] = (char)('0' + (absolute_value % 10U));
-  while (index < OLED_LINE_CHARACTERS)
+  switch (snapshot.state)
   {
-    text[index++] = ' ';
+    case MISSION_STATE_BOOT:
+      text = "MISSION:BOOT    ";
+      break;
+    case MISSION_STATE_WAIT_START:
+      text = "MISSION:WAIT    ";
+      break;
+    case MISSION_STATE_S1_DEPART:
+      switch (snapshot.s1_phase)
+      {
+        case MISSION_S1_TURN:        text = "S1:TURN         "; break;
+        case MISSION_S1_TURN_STABLE: text = "S1:TURN STABLE  "; break;
+        default:                     text = "S1:STARTING     "; break;
+      }
+      break;
+    case MISSION_STATE_S2_CROSS_BUMP:
+      text = "S2:CROSS BUMP   ";
+      break;
+    case MISSION_STATE_S3_ALIGN_GREEN:
+      text = snapshot.vision_target_valid
+                 ? "S3:X ALIGN      "
+                 : "S3:SEARCH GREEN ";
+      break;
+    case MISSION_STATE_S3_SEARCH_TURN_CW:
+      text = "S3:SEARCH CW90  ";
+      break;
+    case MISSION_STATE_S3_SEARCH_TURN_CCW:
+      text = "S3:SEARCH CCW180";
+      break;
+    case MISSION_STATE_S3_TRACK_GREEN:
+      text = snapshot.vision_target_valid
+                 ? "S3:XY TRACK     "
+                 : "S3:TARGET LOST  ";
+      break;
+    case MISSION_STATE_S3_LOWER_FRAME:
+      text = "S3:LOWER FRAME   ";
+      break;
+    case MISSION_STATE_S4_TRACK_CENTER:
+      text = "S4:TRACK CENTER ";
+      break;
+    case MISSION_STATE_S4_CENTER_FOLLOW_THROUGH:
+      text = "S4:X FWD 1 SEC ";
+      break;
+    case MISSION_STATE_S4_WAIT_ARRANGE_READY:
+      text = "S4:WAIT CAM 02  ";
+      break;
+    case MISSION_STATE_S4_TRACK_RIGHT_BLOCK:
+      text = "S4:CURVE RIGHT ";
+      break;
+    case MISSION_STATE_S4_REVERSE_RIGHT_BLOCK:
+      text = "S4:BACK RIGHT   ";
+      break;
+    case MISSION_STATE_S4_WAIT_LEFT_TARGET:
+      text = "S4:WAIT CAM 12  ";
+      break;
+    case MISSION_STATE_S4_TRACK_LEFT_BLOCK:
+      text = "S4:CURVE LEFT  ";
+      break;
+    case MISSION_STATE_S4_REVERSE_LEFT_BLOCK:
+      text = "S4:BACK LEFT    ";
+      break;
+    case MISSION_STATE_S4_RAISE_FRAME:
+      text = "S4:FRAME UP     ";
+      break;
+    case MISSION_STATE_S4_TRACK_FINAL_BLOCK:
+      text = "S4:TRACK FINAL  ";
+      break;
+    case MISSION_STATE_S4_FINAL_RECOVERY_REVERSE:
+      text = "S4:FINAL BACK   ";
+      break;
+    case MISSION_STATE_S4_FINAL_RECOVERY_TURN_270:
+      text = "S4:TURN LEFT270 ";
+      break;
+    case MISSION_STATE_S4_FINAL_RECOVERY_TURN_90:
+      text = "S4:TURN TO 90   ";
+      break;
+    case MISSION_STATE_S4_FINAL_CENTER_OBJECT:
+      text = "S4:FINAL CENTER ";
+      break;
+    case MISSION_STATE_S4_FINAL_LOWER_FRAME:
+      text = "S4:FRAME DOWN   ";
+      break;
+    case MISSION_STATE_S5_WAIT_SINGLE_GREEN:
+      text = "S5:LOAD CHECK   ";
+      break;
+    case MISSION_STATE_S5_ALIGN_FOR_ARRANGE:
+      text = "S5:ALIGN SAFE   ";
+      break;
+    case MISSION_STATE_S5_RAISE_FOR_ARRANGE:
+      text = "S5:FRAME UP     ";
+      break;
+    case MISSION_STATE_S5_REVERSE_FOR_ARRANGE:
+      text = "S5:REVERSE      ";
+      break;
+    case MISSION_STATE_S5_LOWER_FOR_ARRANGE:
+      text = "S5:FRAME DOWN   ";
+      break;
+    case MISSION_STATE_S6_SEARCH_SAFE_ZONE:
+      text = "S6:SCAN SAFE    ";
+      break;
+    case MISSION_STATE_S6_REPOSITION_TURN_SIDE:
+      text = "S6:SIDE TURN    ";
+      break;
+    case MISSION_STATE_S6_REPOSITION_FORWARD:
+      text = "S6:SIDE FORWARD ";
+      break;
+    case MISSION_STATE_S6_REPOSITION_FACE_SAFE:
+      text = "S6:FACE SAFE    ";
+      break;
+    case MISSION_STATE_S6_RECOVERY_FORWARD:
+      text = "S6:RECOVERY FWD ";
+      break;
+    case MISSION_STATE_S6_RECOVERY_TURN_LEFT:
+      text = "S6:RECOVERY LEFT";
+      break;
+    case MISSION_STATE_S6_RECOVERY_TURN_BACK:
+      text = "S6:RECOVERY BACK";
+      break;
+    case MISSION_STATE_S6_TRACK_SAFE_ZONE:
+      text = snapshot.vision_target_valid
+                 ? "S6:VISION TRACK "
+                 : "S6:TARGET LOST  ";
+      break;
+    case MISSION_STATE_S6_FINAL_ALIGN:
+      text = "S6:FINAL ALIGN   ";
+      break;
+    case MISSION_STATE_S6_RAISE_FRAME:
+      text = "S6:FRAME UP      ";
+      break;
+    case MISSION_STATE_S6_PRE_PUSH_REVERSE:
+      text = "S6:PRE REVERSE  ";
+      break;
+    case MISSION_STATE_S6_FINAL_PUSH:
+      text = "S6:FINAL PUSH    ";
+      break;
+    case MISSION_STATE_S6_FINAL_REVERSE:
+      text = "S6:FINAL REVERSE";
+      break;
+    case MISSION_STATE_S6_EXIT_TURN_180:
+      text = "S6:EXIT TURN180 ";
+      break;
+    case MISSION_STATE_S6_SAFE_ZONE_REACHED:
+      text = "S6:PUSH DONE     ";
+      break;
+    case MISSION_STATE_STOPPED:
+      text = "MISSION:STOPPED ";
+      break;
+    case MISSION_STATE_FAULT:
+      text = "MISSION:FAULT   ";
+      break;
+    default:
+      text = "MISSION:UNKNOWN ";
+      break;
   }
-  text[index] = '\0';
+
+  (void)OLED_WriteString(0U, 2U, text);
+}
+
+static uint8_t OLED_TaskReadStartZone(void)
+{
+  uint8_t selector = 0U;
+
+  if (HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_14) == GPIO_PIN_SET)
+  {
+    selector |= 2U;
+  }
+  if (HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_15) == GPIO_PIN_SET)
+  {
+    selector |= 1U;
+  }
+
+  switch (selector)
+  {
+    case 0U: return ROBOT_START_ZONE_BITS_00;
+    case 1U: return ROBOT_START_ZONE_BITS_01;
+    case 2U: return ROBOT_START_ZONE_BITS_10;
+    case 3U: return ROBOT_START_ZONE_BITS_11;
+    default: return ROBOT_START_ZONE_BITS_00;
+  }
+}
+
+static void OLED_TaskShowConfig(void)
+{
+  MissionSnapshot snapshot;
+  bool red;
+  uint8_t zone;
+  char text[17] = "CFG:RED Z0 READY";
+
+  if (MissionTask_GetSnapshot(&snapshot) && snapshot.team_locked &&
+      snapshot.start_zone_locked)
+  {
+    red = snapshot.team == ROBOT_TEAM_RED;
+    zone = snapshot.start_zone;
+    text[11] = 'L';
+    text[12] = 'O';
+    text[13] = 'C';
+    text[14] = 'K';
+    text[15] = ' ';
+    text[16] = '\0';
+    if (!red)
+    {
+      text[4] = 'B';
+      text[5] = 'L';
+      text[6] = 'U';
+    }
+    text[9] = (char)('0' + zone);
+    (void)OLED_WriteString(0U, 4U, text);
+    return;
+  }
+
+  red = (HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_13) == GPIO_PIN_SET
+             ? ROBOT_PE13_HIGH_TEAM
+             : ROBOT_PE13_LOW_TEAM) == ROBOT_TEAM_RED;
+  zone = OLED_TaskReadStartZone();
+  if (!red)
+  {
+    text[4] = 'B';
+    text[5] = 'L';
+    text[6] = 'U';
+  }
+  text[9] = (char)('0' + zone);
+  (void)OLED_WriteString(0U, 4U, text);
+}
+
+static void OLED_TaskShowResetReason(void)
+{
+  ResetReasonSnapshot snapshot;
+  const char *text;
+
+  if (!ResetReason_GetSnapshot(&snapshot))
+  {
+    (void)OLED_WriteString(0U, 6U, "RST:NOT CAPTURED");
+    return;
+  }
+
+  switch (snapshot.reason)
+  {
+    case RESET_REASON_POWER_ON:     text = "RST:POWER ON    "; break;
+    case RESET_REASON_BROWNOUT:     text = "RST:BROWNOUT    "; break;
+    case RESET_REASON_EXTERNAL_PIN: text = "RST:EXT PIN     "; break;
+    case RESET_REASON_SOFTWARE:     text = "RST:SOFTWARE    "; break;
+    case RESET_REASON_IWDG:         text = "RST:IWDG        "; break;
+    case RESET_REASON_WWDG:         text = "RST:WWDG        "; break;
+    case RESET_REASON_LOW_POWER:    text = "RST:LOW POWER   "; break;
+    case RESET_REASON_UNKNOWN:
+    default:                        text = "RST:UNKNOWN     "; break;
+  }
+  (void)OLED_WriteString(0U, 6U, text);
 }
 
 static void OLED_TaskUpdate(void)
 {
-  JY901S_Attitude attitude;
-  char oled_string[OLED_LINE_CHARACTERS + 1U];
-
   if (oled_ready == 0U) return;
 
-  if (!JY901S_GetAttitude(&attitude))
-  {
-    if (jy901s_display_state != JY901S_DISPLAY_OFFLINE)
-    {
-      HAL_StatusTypeDef status = OLED_WriteString(0U, 0U, "JY901S OFFLINE  ");
-      if (status == HAL_OK) status = OLED_WriteString(0U, 2U, "ROLL:   OFFLINE ");
-      if (status == HAL_OK) status = OLED_WriteString(0U, 4U, "PITCH:  OFFLINE ");
-      if (status == HAL_OK) status = OLED_WriteString(0U, 6U, "YAW:    OFFLINE ");
-      if (status == HAL_OK) jy901s_display_state = JY901S_DISPLAY_OFFLINE;
-    }
-    return;
-  }
-
-  if (jy901s_display_state != JY901S_DISPLAY_ONLINE)
-  {
-    if (OLED_WriteString(0U, 0U, "JY901S ONLINE   ") == HAL_OK)
-    {
-      jy901s_display_state = JY901S_DISPLAY_ONLINE;
-    }
-  }
-
-  OLED_TaskFormatAngle(oled_string, "Roll:", attitude.roll_cdeg);
-  (void)OLED_WriteString(0U, 2U, oled_string);
-  OLED_TaskFormatAngle(oled_string, "Pitch:", attitude.pitch_cdeg);
-  (void)OLED_WriteString(0U, 4U, oled_string);
-  OLED_TaskFormatAngle(oled_string, "Yaw:", attitude.yaw_cdeg);
-  (void)OLED_WriteString(0U, 6U, oled_string);
+  OLED_TaskShowStartButton();
+  OLED_TaskShowMission();
+  OLED_TaskShowConfig();
+  OLED_TaskShowResetReason();
 }
 
 HAL_StatusTypeDef OLED_TaskInit(I2C_HandleTypeDef *hi2c)
@@ -83,11 +297,10 @@ HAL_StatusTypeDef OLED_TaskInit(I2C_HandleTypeDef *hi2c)
   if (status != HAL_OK) return status;
 
   oled_ready = 1U;
-  jy901s_display_state = JY901S_DISPLAY_UNKNOWN;
-  status = OLED_WriteString(0U, 0U, "JY901S UART4    ");
-  if (status == HAL_OK) status = OLED_WriteString(0U, 2U, "ROLL:           ");
-  if (status == HAL_OK) status = OLED_WriteString(0U, 4U, "PITCH:          ");
-  if (status == HAL_OK) status = OLED_WriteString(0U, 6U, "YAW:            ");
+  status = OLED_WriteString(0U, 0U, "PE12:CHECKING   ");
+  if (status == HAL_OK) status = OLED_WriteString(0U, 2U, "MISSION:BOOT    ");
+  if (status == HAL_OK) status = OLED_WriteString(0U, 4U, "CFG:CHECKING    ");
+  if (status == HAL_OK) OLED_TaskShowResetReason();
   return status;
 }
 
