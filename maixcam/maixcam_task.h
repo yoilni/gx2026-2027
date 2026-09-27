@@ -30,9 +30,12 @@
 #define MAIXCAM_COMMAND_SIZE     5U
 
 #define MAIXCAM_COMMAND_SEARCH_TARGET 0x03U
+#define MAIXCAM_COMMAND_RED_SEARCH_DONE 0x13U
 #define MAIXCAM_COMMAND_CENTER_ACK    0x14U
 #define MAIXCAM_COMMAND_RIGHT_DONE_ACK 0x12U
+#define MAIXCAM_COMMAND_LEFT_DONE_ACK 0x22U
 #define MAIXCAM_COMMAND_FINAL_CAPTURE 0x24U
+#define MAIXCAM_COMMAND_OBSTACLE_DONE_ACK 0x36U
 #define MAIXCAM_COMMAND_ANALYZE_LOAD_RED  0x15U
 #define MAIXCAM_COMMAND_ANALYZE_LOAD_BLUE 0x25U
 #define MAIXCAM_COMMAND_SELECT_BLUE   0x01U
@@ -49,7 +52,10 @@
 #define MAIXCAM_EVENT_NO_ARRANGE_REQUIRED 0x06U
 #define MAIXCAM_EVENT_SAFE_ZONE_FOUND 0x16U
 #define MAIXCAM_EVENT_SAFE_ZONE_ALIGN_READY 0x26U
+#define MAIXCAM_EVENT_SAFE_ZONE_OBSTACLE 0x36U
+#define MAIXCAM_EVENT_RED_PRIORITY_REQUEST 0x11U
 #define MAIXCAM_EVENT_ARRANGE_TARGET_LOST 0xE2U
+#define MAIXCAM_EVENT_SEARCH_TARGET_LOST 0xE3U
 #define MAIXCAM_EVENT_NO_TARGET       0xEEU
 
 typedef struct
@@ -71,5 +77,7 @@ void MaixCam_UART_ErrorCallback(UART_HandleTypeDef *huart);
 bool MaixCam_GetObject(MaixCam_Object *object);
 /* Atomically reads and clears one pending 5-byte event frame. */
 bool MaixCam_TakeEvent(uint8_t *event_code);
+/* Separate latch so a subsequent E3/04 cannot overwrite the red-priority request. */
+bool MaixCam_TakeRedPriorityRequest(void);
 
 #endif /* MAIXCAM_TASK_H */

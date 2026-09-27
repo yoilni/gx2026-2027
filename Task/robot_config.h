@@ -1,6 +1,12 @@
 #ifndef ROBOT_CONFIG_H
 #define ROBOT_CONFIG_H
 
+/* UART2 angle snapshots, plus an immediate snapshot on every state entry. */
+#define ROBOT_ANGLE_DEBUG_PERIOD_MS 500U
+#define ROBOT_S7_SILENT_TIMEOUT_MS 2000U
+#define ROBOT_S7_SILENT_LEFT_CDEG  4500L
+#define ROBOT_S7_SILENT_RIGHT_CDEG 9000L
+
 /* M2006 CAN IDs configured on the two wheel ESCs. */
 #define ROBOT_LEFT_WHEEL_MOTOR_ID       2U
 #define ROBOT_RIGHT_WHEEL_MOTOR_ID      4U
@@ -100,9 +106,10 @@
 #define ROBOT_VISION_Y_KD                    0.00f
 #define ROBOT_VISION_Y_INTEGRAL_LIMIT      500.0f
 #define ROBOT_VISION_Y_MIN_FORWARD_RPM        12.0f
-#define ROBOT_VISION_Y_MAX_FORWARD_RPM       110.0f
+#define ROBOT_VISION_03_04_MIN_FORWARD_RPM     32.0f
+#define ROBOT_VISION_Y_MAX_FORWARD_RPM       130.0f
 #define ROBOT_VISION_Y_FORWARD_SIGN             -1
-#define ROBOT_VISION_TRACK_WHEEL_MAX_RPM       110
+#define ROBOT_VISION_TRACK_WHEEL_MAX_RPM       130
 #define ROBOT_VISION_TRACK_TIMEOUT_MS        10000U
 
 /* Initial frame-lowering delay after MaixCam reports event 04. */
@@ -119,32 +126,35 @@
 #define ROBOT_S4_CENTER_FOLLOW_RPM                   60
 #define ROBOT_S4_CENTER_FOLLOW_TURN_MAX_RPM          20
 #define ROBOT_S4_CENTER_FOLLOW_MS                 1000U
-#define ROBOT_S4_RIGHT_CORNER_FOLLOW_MS            800U
-#define ROBOT_S4_LEFT_CORNER_FOLLOW_MS            1050U
-#define ROBOT_S4_CORNER_PUSH_RPM                      80
+#define ROBOT_S4_RIGHT_CORNER_FOLLOW_MS            486U
+#define ROBOT_S4_LEFT_CORNER_FOLLOW_MS             929U
+#define ROBOT_S4_LEFT_CORNER_INITIAL_RPM            60
+#define ROBOT_S4_LEFT_CORNER_INITIAL_MS            300U
+#define ROBOT_S4_CORNER_PUSH_RPM                      70
 /* Fixed wheel differences for the two timed corner pushes. */
-#define ROBOT_S4_RIGHT_CORNER_WHEEL_DIFF_RPM          21
-#define ROBOT_S4_LEFT_CORNER_WHEEL_DIFF_RPM           19
-#define ROBOT_S4_RIGHT_REVERSE_RPM                  80
-#define ROBOT_S4_RIGHT_REVERSE_MS                  900U
-#define ROBOT_S4_LEFT_REVERSE_RPM                   80
-#define ROBOT_S4_LEFT_REVERSE_MS                   900U
+#define ROBOT_S4_RIGHT_CORNER_WHEEL_DIFF_RPM          26
+#define ROBOT_S4_LEFT_CORNER_WHEEL_DIFF_RPM           22
+#define ROBOT_S4_RIGHT_REVERSE_RPM                 100
+#define ROBOT_S4_RIGHT_REVERSE_MS                  560U
+#define ROBOT_S4_LEFT_REVERSE_RPM                  100
+#define ROBOT_S4_LEFT_REVERSE_MS                   560U
 #define ROBOT_S4_ARRANGE_RECOVERY_REVERSE_RPM        60
 #define ROBOT_S4_ARRANGE_RECOVERY_REVERSE_MS        500U
 #define ROBOT_S4_ARRANGE_RECOVERY_LEFT_CDEG         4500L
 #define ROBOT_S4_ARRANGE_RECOVERY_RIGHT_CDEG        9000L
-#define ROBOT_S4_FRAME_RAISE_SETTLE_MS           1000U
+#define ROBOT_S4_FRAME_RAISE_SETTLE_MS            300U
 #define ROBOT_S4_FINAL_MISSING_TIMEOUT_MS         2000U
 #define ROBOT_S4_FINAL_RECOVERY_REVERSE_RPM          50
 #define ROBOT_S4_FINAL_RECOVERY_REVERSE_MS          700U
-#define ROBOT_S4_FINAL_RECOVERY_TURN_270_CDEG      27000L
-#define ROBOT_S4_FINAL_RECOVERY_TURN_90_CDEG        9000L
+/* Search both sides of the mapped safe heading; never use raw fixed yaw. */
+#define ROBOT_S4_FINAL_RECOVERY_FIRST_SAFE_OFFSET_CDEG   9000L
+#define ROBOT_S4_FINAL_RECOVERY_SECOND_SAFE_OFFSET_CDEG (-9000L)
 #define ROBOT_S4_FINAL_RECOVERY_TURN_FAST_RPM          25
 #define ROBOT_S4_FINAL_RECOVERY_TURN_SLOW_RPM          12
 #define ROBOT_S4_FINAL_RECOVERY_TURN_SLOW_CDEG       1000L
 #define ROBOT_S4_FINAL_RECOVERY_TURN_TIMEOUT_MS     10000U
 #define ROBOT_S4_FINAL_CENTER_RPM                    60
-#define ROBOT_S4_FINAL_CENTER_MS                    150U
+#define ROBOT_S4_FINAL_CENTER_MS                    350U
 #define ROBOT_S4_FRAME_LOWER_SETTLE_MS           1000U
 #define ROBOT_S4_POST_LOWER_REVERSE_RPM              70
 #define ROBOT_S4_POST_LOWER_REVERSE_MS              400U
@@ -195,6 +205,32 @@
 #define ROBOT_S6_PRE_REPOSITION_TRACK_MS           1000U
 #define ROBOT_S6_REPOSITION_MIN_OFFSET_CDEG         2000L
 #define ROBOT_S6_REPOSITION_SECTOR_CDEG            9000L
+/* Side-reposition calibration entry points, one row per zone/team/target kind.
+   Fields: zone, team, kind (0=supply, 1=casualty), enabled,
+   sector start, sector end, side heading, include start, include end.
+   Angles are centidegrees relative to the yaw latched at PE12 start (not the
+   45-degree departure heading). Left turns increase yaw; right turns decrease
+   yaw. A clockwise-positive angle A maps to (360 - A) modulo 360 here.
+   Sectors may cross 0 degrees.
+   Disabled/unconfirmed rows retain the existing safe-heading-relative rule.
+   Only zone 3 / blue is currently specified. Enable other rows after calibration. */
+#define ROBOT_S6_SIDE_RULE_ROWS \
+  {1U, ROBOT_TEAM_RED,  0U, 0U,     0L,     0L,     0L, 1U, 0U}, \
+  {1U, ROBOT_TEAM_RED,  1U, 0U,     0L,     0L,     0L, 0U, 1U}, \
+  {1U, ROBOT_TEAM_BLUE, 0U, 0U,     0L,     0L,     0L, 1U, 0U}, \
+  {1U, ROBOT_TEAM_BLUE, 1U, 0U,     0L,     0L,     0L, 0U, 1U}, \
+  {2U, ROBOT_TEAM_RED,  0U, 0U,     0L,     0L,     0L, 1U, 0U}, \
+  {2U, ROBOT_TEAM_RED,  1U, 0U,     0L,     0L,     0L, 0U, 1U}, \
+  {2U, ROBOT_TEAM_BLUE, 0U, 0U,     0L,     0L,     0L, 1U, 0U}, \
+  {2U, ROBOT_TEAM_BLUE, 1U, 0U,     0L,     0L,     0L, 0U, 1U}, \
+  {3U, ROBOT_TEAM_RED,  0U, 0U,     0L,     0L,     0L, 1U, 0U}, \
+  {3U, ROBOT_TEAM_RED,  1U, 0U,     0L,     0L,     0L, 0U, 1U}, \
+  {3U, ROBOT_TEAM_BLUE, 0U, 1U, 18000L, 27000L, 27000L, 0U, 1U}, \
+  {3U, ROBOT_TEAM_BLUE, 1U, 1U,  9000L, 18000L,  9000L, 1U, 0U}, \
+  {4U, ROBOT_TEAM_RED,  0U, 0U,     0L,     0L,     0L, 1U, 0U}, \
+  {4U, ROBOT_TEAM_RED,  1U, 0U,     0L,     0L,     0L, 0U, 1U}, \
+  {4U, ROBOT_TEAM_BLUE, 0U, 0U,     0L,     0L,     0L, 1U, 0U}, \
+  {4U, ROBOT_TEAM_BLUE, 1U, 0U,     0L,     0L,     0L, 0U, 1U}
 #define ROBOT_S6_REPOSITION_FORWARD_RPM               50
 #define ROBOT_S6_REPOSITION_FORWARD_MS               700U
 #define ROBOT_S6_REPOSITION_WHEEL_MAX_RPM              80
@@ -203,26 +239,36 @@
 #define ROBOT_S6_APPROACH_TURN_MAX_RPM              35
 #define ROBOT_S6_APPROACH_WHEEL_MAX_RPM             90
 #define ROBOT_S6_APPROACH_TIMEOUT_MS              15000U
+#define ROBOT_S6_TRACK_REVERSE_INTERVAL_MS         8000U
+#define ROBOT_S6_TRACK_REVERSE_RPM                  100
+#define ROBOT_S6_TRACK_REVERSE_MS                   700U
+/* Event 36: move past the blocking object, then face the absolute safe heading. */
+#define ROBOT_S6_OBSTACLE_LEFT_ANGLE_CDEG          4500L
+#define ROBOT_S6_OBSTACLE_DRIVE_RPM                 100
+#define ROBOT_S6_OBSTACLE_FORWARD_MS               500U
+#define ROBOT_S6_OBSTACLE_REVERSE_MS               700U
 #define ROBOT_S6_FRAME_RAISE_SETTLE_MS             1000U
 #define ROBOT_S6_PRE_PUSH_REVERSE_RPM               80
 #define ROBOT_S6_PRE_PUSH_REVERSE_WHEEL_MAX_RPM     90
 #define ROBOT_S6_PRE_PUSH_REVERSE_MS               500U
 #define ROBOT_S6_PRE_PUSH_BRAKE_MS                 200U
 #define ROBOT_S6_PRE_PUSH_TIMEOUT_MS              1500U
-#define ROBOT_S6_FINAL_PUSH_RPM                     70
-#define ROBOT_S6_FINAL_PUSH_WHEEL_MAX_RPM           80
-#define ROBOT_S6_FINAL_PUSH_MS                     1300U
+#define ROBOT_S6_FINAL_PUSH_RPM                     90
+#define ROBOT_S6_FINAL_PUSH_WHEEL_MAX_RPM          100
+#define ROBOT_S6_FINAL_PUSH_MS                     1000U
 #define ROBOT_S6_FINAL_PUSH_TIMEOUT_MS             3000U
-#define ROBOT_S6_REVERSE_RPM                        70
-#define ROBOT_S6_REVERSE_WHEEL_MAX_RPM              80
+#define ROBOT_S6_REVERSE_RPM                       100
+#define ROBOT_S6_REVERSE_WHEEL_MAX_RPM             110
 #define ROBOT_S6_REVERSE_BRAKE_MS                  300U
-#define ROBOT_S6_REVERSE_DRIVE_MS                 2000U
+#define ROBOT_S6_REVERSE_DRIVE_MS                 1400U
 #define ROBOT_S6_REVERSE_TIMEOUT_MS               3000U
 #define ROBOT_S6_EXIT_TURN_ANGLE_CDEG            18000L
+#define ROBOT_S6_EXIT_TURN_MAX_RPM                  20
+#define ROBOT_S6_EXIT_TURN_TIMEOUT_MS             9000U
 
 /* Mirrored collection-frame servo endpoints (0..280 degree command scale). */
 #define ROBOT_LEFT_FRAME_DOWN_DEG       222U
-#define ROBOT_LEFT_FRAME_UP_DEG         130U
+#define ROBOT_LEFT_FRAME_UP_DEG         127U
 #define ROBOT_RIGHT_FRAME_DOWN_DEG      2U
 #define ROBOT_RIGHT_FRAME_UP_DEG        90U
 #define ROBOT_FRAME_SERVO_MAX_ANGLE_DEG 280U
@@ -232,7 +278,8 @@
 /* PA5/TIM2 CH1 MG90 camera-servo calibration. The tested 80-degree position
    gives the wide search view; 45 degrees sees the complete collection frame. */
 #define ROBOT_CAMERA_WIDE_ANGLE_DEG       80U
-#define ROBOT_CAMERA_NEAR_ANGLE_DEG       45U
+#define ROBOT_CAMERA_NEAR_ANGLE_DEG       35U
+#define ROBOT_CAMERA_POWERUP_SETTLE_MS    500U
 #define ROBOT_CAMERA_SERVO_MIN_PULSE_US  500U
 #define ROBOT_CAMERA_SERVO_MAX_PULSE_US 2500U
 

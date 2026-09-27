@@ -54,9 +54,18 @@ HAL_StatusTypeDef Actuator_Init(void)
   pulse_us = Actuator_Mg90AngleToPulse(ROBOT_CAMERA_WIDE_ANGLE_DEG);
 
   /* PA5 is TIM2 CH1. Continuous PWM holds the MG90 and camera at the
-     calibrated wide-angle position after power-up. */
+     calibrated wide-view position after power-up. */
   __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pulse_us);
-  return HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+  if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1) != HAL_OK)
+  {
+    return HAL_ERROR;
+  }
+
+  HAL_Delay(ROBOT_CAMERA_POWERUP_SETTLE_MS);
+
+  /* Raise the collection frame after the camera settles so the chassis can
+     cross the speed bump. State 3 lowers it before target tracking. */
+  return Actuator_SetFrameRaised();
 }
 
 static HAL_StatusTypeDef Actuator_SetFrameAngles(uint16_t left_angle_deg,

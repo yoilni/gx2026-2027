@@ -91,6 +91,9 @@ static void OLED_TaskShowMission(void)
     case MISSION_STATE_S4_REVERSE_LEFT_BLOCK:
       text = "S4:BACK LEFT    ";
       break;
+    case MISSION_STATE_S4_WAIT_FINAL_READY:
+      text = "S4:WAIT CAM 24  ";
+      break;
     case MISSION_STATE_S4_RAISE_FRAME:
       text = "S4:FRAME UP     ";
       break;
@@ -101,10 +104,10 @@ static void OLED_TaskShowMission(void)
       text = "S4:FINAL BACK   ";
       break;
     case MISSION_STATE_S4_FINAL_RECOVERY_TURN_270:
-      text = "S4:TURN LEFT270 ";
+      text = "S4:TURN SIDE1   ";
       break;
     case MISSION_STATE_S4_FINAL_RECOVERY_TURN_90:
-      text = "S4:TURN TO 90   ";
+      text = "S4:TURN SIDE2   ";
       break;
     case MISSION_STATE_S4_FINAL_CENTER_OBJECT:
       text = "S4:FINAL CENTER ";
@@ -154,7 +157,26 @@ static void OLED_TaskShowMission(void)
                  : "S6:TARGET LOST  ";
       break;
     case MISSION_STATE_S6_FINAL_ALIGN:
+    case MISSION_STATE_S6_OBSTACLE_FACE_SAFE:
       text = "S6:FINAL ALIGN   ";
+      break;
+    case MISSION_STATE_S6_OBSTACLE_TURN_LEFT:
+      text = "S6:AVOID LEFT   ";
+      break;
+    case MISSION_STATE_S6_OBSTACLE_FORWARD:
+      text = "S6:AVOID FWD    ";
+      break;
+    case MISSION_STATE_S6_OBSTACLE_REVERSE:
+      text = "S6:AVOID REVERSE";
+      break;
+    case MISSION_STATE_S6_TRACK_TIMEOUT_REVERSE:
+      text = "S6:8S REVERSE   ";
+      break;
+    case MISSION_STATE_S7_SILENT_TURN_LEFT:
+      text = "S7:SILENT LEFT  ";
+      break;
+    case MISSION_STATE_S7_SILENT_TURN_BACK:
+      text = "S7:SILENT RIGHT ";
       break;
     case MISSION_STATE_S6_RAISE_FRAME:
       text = "S6:FRAME UP      ";

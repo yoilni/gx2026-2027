@@ -35,6 +35,12 @@ static osThreadId_t mission_task_handle;
 static osEventFlagsId_t mission_event_handle;
 static osMutexId_t mission_snapshot_mutex;
 static MissionSnapshot mission_snapshot;
+static uint32_t angle_next_debug_tick;
+static uint32_t s7_last_message_tick;
+static uint32_t s7_last_coordinate_sequence;
+static MissionState s7_silent_resume_state;
+static int32_t s7_silent_left_yaw_cdeg;
+static int32_t s7_silent_right_yaw_cdeg;
 static uint32_t s1_turn_stable_since;
 static uint32_t s1_next_debug_tick;
 static bool s2_drive_finished;
@@ -44,6 +50,7 @@ static uint32_t s3_search_turn_stable_since;
 static int32_t s3_search_origin_yaw_cdeg;
 static int32_t s3_search_yaw_target_cdeg;
 static bool s3_green_error_seen;
+static uint8_t s3_target_select_command = MAIXCAM_COMMAND_SELECT_GREEN;
 static bool s3_search_sweep_completed;
 static bool s3_search_ccw_midpoint_done;
 static bool vision_search_forward_active;
@@ -71,6 +78,8 @@ static uint32_t s4_center_target_lost_since;
 static bool s4_center_search_sweep_completed;
 static uint32_t s4_final_missing_since;
 static uint32_t s4_final_turn_stable_since;
+static int32_t s4_final_first_yaw_cdeg;
+static int32_t s4_final_second_yaw_cdeg;
 static uint8_t s4_final_recovery_count;
 static MissionState s4_arrange_recovery_resume_state;
 static int32_t s4_arrange_recovery_base_yaw_cdeg;
@@ -90,9 +99,12 @@ static int32_t s6_recovery_left_yaw_cdeg;
 static int32_t s6_recovery_right_yaw_cdeg;
 static int32_t s6_push_yaw_target_cdeg;
 static int32_t s6_exit_yaw_target_cdeg;
+static int32_t s6_obstacle_left_yaw_cdeg;
 static uint32_t s6_missing_since;
 static uint32_t s6_search_start_tick;
 static uint32_t s6_approach_start_tick;
+static uint32_t s6_track_elapsed_ms;
+static uint32_t s6_track_accounting_tick;
 static int32_t s6_reposition_side_yaw_cdeg;
 static uint32_t s6_reposition_x_stable_since;
 static uint32_t s6_pre_reposition_track_start_tick;
@@ -129,6 +141,12 @@ static void MissionTask_CommandS6Straight(uint32_t now,
                                            int32_t target_yaw_cdeg,
                                            int16_t forward_rpm,
                                            int16_t wheel_max_rpm);
+static void MissionTask_StartVisionSearchRecovery(
+    uint32_t now, MissionState resume_state, int32_t origin_yaw_cdeg);
+static void MissionTask_CompleteS7RedRecovery(uint32_t now);
+static void MissionTask_StartS7Decision(uint32_t now);
+static void MissionTask_StartS6ObstacleAvoidance(uint32_t now);
+static void MissionTask_DebugAngles(uint32_t now, bool force);
 
 static int32_t MissionTask_WrapYaw(int32_t angle_cdeg)
 {
@@ -421,6 +439,13 @@ static void MissionTask_EnterState(MissionState state, uint32_t now)
 
   mission_snapshot.state = state;
   mission_snapshot.state_entry_tick = now;
+  if ((state == MISSION_STATE_S7_SEARCH_RED) ||
+      (state == MISSION_STATE_S7_WAIT_SECOND_E3) ||
+      (state == MISSION_STATE_S7_SEARCH_BLACK))
+  {
+    s7_last_message_tick = now;
+    s7_last_coordinate_sequence = mission_snapshot.target_sequence;
+  }
 
   switch (state)
   {
@@ -466,6 +491,9 @@ static void MissionTask_EnterState(MissionState state, uint32_t now)
     case MISSION_STATE_S4_WAIT_LEFT_TARGET:
       (void)DebugUart_Log("[MISSION] S4_WAIT_RX_12\r\n");
       break;
+    case MISSION_STATE_S4_WAIT_FINAL_READY:
+      (void)DebugUart_Log("[MISSION] S4_WAIT_RX_24\r\n");
+      break;
     case MISSION_STATE_S4_TRACK_LEFT_BLOCK:
       (void)DebugUart_Log("[MISSION] S4_TRACK_LEFT_TO_RIGHT_CORNER\r\n");
       break;
@@ -491,10 +519,10 @@ static void MissionTask_EnterState(MissionState state, uint32_t now)
       (void)DebugUart_Log("[MISSION] S4_FINAL_RECOVERY_REVERSE\r\n");
       break;
     case MISSION_STATE_S4_FINAL_RECOVERY_TURN_270:
-      (void)DebugUart_Log("[MISSION] S4_FINAL_RECOVERY_TURN_270\r\n");
+      (void)DebugUart_Log("[MISSION] S4_FINAL_RECOVERY_TURN_SIDE1\r\n");
       break;
     case MISSION_STATE_S4_FINAL_RECOVERY_TURN_90:
-      (void)DebugUart_Log("[MISSION] S4_FINAL_RECOVERY_TURN_90\r\n");
+      (void)DebugUart_Log("[MISSION] S4_FINAL_RECOVERY_TURN_SIDE2\r\n");
       break;
     case MISSION_STATE_S4_FINAL_CENTER_OBJECT:
       (void)DebugUart_Log("[MISSION] S4_FINAL_CENTER_OBJECT\r\n");
@@ -544,6 +572,21 @@ static void MissionTask_EnterState(MissionState state, uint32_t now)
     case MISSION_STATE_S6_TRACK_SAFE_ZONE:
       (void)DebugUart_Log("[MISSION] S6_VISION_APPROACH\r\n");
       break;
+    case MISSION_STATE_S6_OBSTACLE_TURN_LEFT:
+      (void)DebugUart_Log("[MISSION] S6_OBSTACLE_TURN_LEFT\r\n");
+      break;
+    case MISSION_STATE_S6_OBSTACLE_FORWARD:
+      (void)DebugUart_Log("[MISSION] S6_OBSTACLE_FORWARD\r\n");
+      break;
+    case MISSION_STATE_S6_OBSTACLE_REVERSE:
+      (void)DebugUart_Log("[MISSION] S6_OBSTACLE_REVERSE\r\n");
+      break;
+    case MISSION_STATE_S6_OBSTACLE_FACE_SAFE:
+      (void)DebugUart_Log("[MISSION] S6_OBSTACLE_FACE_SAFE\r\n");
+      break;
+    case MISSION_STATE_S6_TRACK_TIMEOUT_REVERSE:
+      (void)DebugUart_Log("[MISSION] S6_TRACK_TIMEOUT_REVERSE\r\n");
+      break;
     case MISSION_STATE_S6_FINAL_ALIGN:
       (void)DebugUart_Log("[MISSION] S6_FINAL_ALIGN\r\n");
       break;
@@ -565,6 +608,21 @@ static void MissionTask_EnterState(MissionState state, uint32_t now)
     case MISSION_STATE_S6_SAFE_ZONE_REACHED:
       (void)DebugUart_Log("[MISSION] S6_SAFE_ZONE_REACHED\r\n");
       break;
+    case MISSION_STATE_S7_SEARCH_RED:
+      (void)DebugUart_Log("[MISSION] S7_SEARCH_RED\r\n");
+      break;
+    case MISSION_STATE_S7_WAIT_SECOND_E3:
+      (void)DebugUart_Log("[MISSION] S7_WAIT_SECOND_E3\r\n");
+      break;
+    case MISSION_STATE_S7_SEARCH_BLACK:
+      (void)DebugUart_Log("[MISSION] S7_SEARCH_BLACK\r\n");
+      break;
+    case MISSION_STATE_S7_SILENT_TURN_LEFT:
+      (void)DebugUart_Log("[MISSION] S7_SILENT_TURN_LEFT\r\n");
+      break;
+    case MISSION_STATE_S7_SILENT_TURN_BACK:
+      (void)DebugUart_Log("[MISSION] S7_SILENT_TURN_BACK\r\n");
+      break;
     case MISSION_STATE_STOPPED:
       (void)DebugUart_Log("[MISSION] STOPPED\r\n");
       break;
@@ -580,6 +638,7 @@ static void MissionTask_EnterState(MissionState state, uint32_t now)
   /* Every main-state boundary explicitly removes the previous motor command.
      The active state's runner publishes its own command afterwards. */
   MissionTask_StopWheels();
+  MissionTask_DebugAngles(now, true);
 }
 
 static void MissionTask_UpdateInputs(uint32_t now)
@@ -726,6 +785,13 @@ static void MissionTask_DebugS1(uint32_t now)
 
 static bool MissionTask_BeginS3Vision(uint32_t now)
 {
+  const char *target_name =
+      s3_target_select_command == MAIXCAM_COMMAND_SELECT_RED
+          ? "RED"
+          : (s3_target_select_command == MAIXCAM_COMMAND_SELECT_BLACK
+                 ? "BLACK"
+                 : "GREEN");
+
   MissionTask_EnterState(MISSION_STATE_S3_ALIGN_GREEN, now);
 
   /* A coordinate received before command 03 belongs to the previous camera
@@ -736,7 +802,8 @@ static bool MissionTask_BeginS3Vision(uint32_t now)
   MissionTask_ResetVisionPid();
   s3_align_stable_since = 0U;
   s3_search_turn_stable_since = 0U;
-  s3_search_origin_yaw_cdeg = mission_snapshot.yaw_target_cdeg;
+  s3_search_origin_yaw_cdeg =
+      MissionTask_WrapYaw(mission_snapshot.yaw_cdeg);
   s3_search_yaw_target_cdeg = s3_search_origin_yaw_cdeg;
   s3_green_error_seen = false;
   s3_search_sweep_completed = false;
@@ -747,15 +814,16 @@ static bool MissionTask_BeginS3Vision(uint32_t now)
   s3_wait_event04_logged = false;
   s3_next_debug_tick = now;
 
-  if (MaixCam_SendCommand(MAIXCAM_COMMAND_SELECT_GREEN) != HAL_OK)
+  if (MaixCam_SendCommand(s3_target_select_command) != HAL_OK)
   {
     mission_snapshot.fault_flags |= MISSION_FAULT_VISION_TX;
     MissionTask_EnterState(MISSION_STATE_FAULT, now);
     return false;
   }
   (void)DebugUart_Logf(
-      "[S3] TX E1 E2 %02X 1E 2E, SELECT GREEN ID=5\r\n",
-      (unsigned int)MAIXCAM_COMMAND_SELECT_GREEN);
+      "[S3] TX E1 E2 %02X 1E 2E, SELECT %s\r\n",
+      (unsigned int)s3_target_select_command,
+      target_name);
 
   if (MaixCam_SendCommand(MAIXCAM_COMMAND_SEARCH_TARGET) != HAL_OK)
   {
@@ -767,8 +835,9 @@ static bool MissionTask_BeginS3Vision(uint32_t now)
   return true;
 }
 
-static bool MissionTask_StartS3Align(uint32_t now)
+static bool MissionTask_StartS3Align(uint32_t now, uint8_t select_command)
 {
+  s3_target_select_command = select_command;
   s4_final_mode_already_active = false;
   s4_final_event34_pending = false;
   s4_final_missing_since = 0U;
@@ -978,7 +1047,7 @@ static void MissionTask_RunS2CrossBump(uint32_t now)
                   ROBOT_S2_CROSS_BUMP_SETTLE_MS))
   {
     (void)DebugUart_Log("[S2] DONE, ENTER S3\r\n");
-    (void)MissionTask_StartS3Align(now);
+    (void)MissionTask_StartS3Align(now, MAIXCAM_COMMAND_SELECT_GREEN);
   }
 }
 
@@ -1096,8 +1165,54 @@ static bool MissionTask_TryStartS3Capture(uint32_t now)
 {
   uint8_t event_code;
 
-  if (!MaixCam_TakeEvent(&event_code) ||
-      (event_code != MAIXCAM_EVENT_OBJECT_IN_FRAME))
+  if (!MaixCam_TakeEvent(&event_code))
+  {
+    return false;
+  }
+
+  if (event_code == MAIXCAM_EVENT_SEARCH_TARGET_LOST)
+  {
+    /* E3 is repeated while the camera has no target. If a coordinate became
+       fresh in the same control cycle, it is newer evidence than a queued E3
+       and must be allowed to resume the vision controller. */
+    if (mission_snapshot.vision_target_valid)
+    {
+      (void)DebugUart_Log(
+          "[S3] RX E3 WITH FRESH COORDINATES, KEEP TARGET\r\n");
+      return false;
+    }
+
+    MaixCam_ClearObject();
+    mission_snapshot.vision_target_valid = false;
+    s3_target_lost_since = now;
+    s3_search_sweep_completed = false;
+
+    if ((mission_snapshot.state == MISSION_STATE_S3_SEARCH_TURN_CW) ||
+        (mission_snapshot.state == MISSION_STATE_S3_SEARCH_TURN_CCW))
+    {
+      (void)DebugUart_Log(
+          "[S3-S] RX F1 F2 E3 1F 2F, RECOVERY ALREADY ACTIVE\r\n");
+      return true;
+    }
+
+    (void)DebugUart_Log(
+        "[S3] RX F1 F2 E3 1F 2F, START SEARCH RECOVERY\r\n");
+    if (s3_target_select_command == MAIXCAM_COMMAND_SELECT_RED)
+    {
+      /* A transient red coordinate may have moved 07 into 03. Preserve the
+         red -> recovery -> 13 -> second E3 -> black decision in that case. */
+      (void)DebugUart_Log(
+          "[S7] RED LOST IN 03, RECOVER ONCE THEN TX13, NEXT E3 SELECT BLACK31\r\n");
+      MissionTask_StartVisionSearchRecovery(
+          now, MISSION_STATE_S7_SEARCH_RED, mission_snapshot.yaw_cdeg);
+      return true;
+    }
+    MissionTask_StartVisionSearchRecovery(
+        now, MISSION_STATE_S3_ALIGN_GREEN, s3_search_origin_yaw_cdeg);
+    return true;
+  }
+
+  if (event_code != MAIXCAM_EVENT_OBJECT_IN_FRAME)
   {
     return false;
   }
@@ -1126,6 +1241,12 @@ static bool MissionTask_TryStartS3Capture(uint32_t now)
 static void MissionTask_StartVisionSearchRecovery(
     uint32_t now, MissionState resume_state, int32_t origin_yaw_cdeg)
 {
+  const char *source = resume_state == MISSION_STATE_S4_TRACK_CENTER
+                           ? "04"
+                           : (resume_state == MISSION_STATE_S7_SEARCH_RED
+                                  ? "07"
+                                  : "03");
+
   MissionTask_StopWheels();
   MissionTask_ResetVisionControllerState();
   vision_search_resume_state = resume_state;
@@ -1141,7 +1262,7 @@ static void MissionTask_StartVisionSearchRecovery(
   (void)DebugUart_Logf(
       "[V-SEARCH] source=%s FORWARD rpm=%d time=%lums, then CW90 "
       "origin=%ld target=%ld\r\n",
-      resume_state == MISSION_STATE_S4_TRACK_CENTER ? "04" : "03",
+      source,
       ROBOT_VISION_SEARCH_FORWARD_RPM,
       (unsigned long)ROBOT_VISION_SEARCH_FORWARD_MS,
       (long)s3_search_origin_yaw_cdeg,
@@ -1183,7 +1304,11 @@ static void MissionTask_RunS3Align(uint32_t now)
           s3_green_error_seen ? "GREEN LOST" : "NO GREEN",
           (unsigned long)ROBOT_S3_GREEN_WAIT_MS);
       MissionTask_StartVisionSearchRecovery(
-          now, MISSION_STATE_S3_ALIGN_GREEN, s3_search_origin_yaw_cdeg);
+          now,
+          s3_target_select_command == MAIXCAM_COMMAND_SELECT_RED
+              ? MISSION_STATE_S7_SEARCH_RED : MISSION_STATE_S3_ALIGN_GREEN,
+          s3_target_select_command == MAIXCAM_COMMAND_SELECT_RED
+              ? mission_snapshot.yaw_cdeg : s3_search_origin_yaw_cdeg);
       return;
     }
 
@@ -1252,14 +1377,15 @@ static void MissionTask_RunS3SearchTurn(uint32_t now)
     return;
   }
 
-  if ((vision_search_resume_state != MISSION_STATE_S4_TRACK_CENTER) &&
+  if ((vision_search_resume_state == MISSION_STATE_S3_ALIGN_GREEN) &&
       MissionTask_TryStartS3Capture(now))
   {
     return;
   }
 
-  /* Do not finish a blind search leg after vision has already found green. */
-  if (mission_snapshot.vision_target_valid)
+  /* Do not finish a blind search leg after vision has found a target. */
+  if (mission_snapshot.vision_target_valid &&
+      (vision_search_resume_state != MISSION_STATE_S7_SEARCH_RED))
   {
     vision_search_forward_active = false;
     MissionTask_ResetVisionControllerState();
@@ -1269,6 +1395,11 @@ static void MissionTask_RunS3SearchTurn(uint32_t now)
       s4_center_target_lost_since = 0U;
       s4_next_debug_tick = now;
       MissionTask_EnterState(MISSION_STATE_S4_TRACK_CENTER, now);
+    }
+    else if (vision_search_resume_state == MISSION_STATE_S7_SEARCH_RED)
+    {
+      MaixCam_ClearEvent();
+      MissionTask_EnterState(MISSION_STATE_S7_SEARCH_RED, now);
     }
     else
     {
@@ -1284,7 +1415,10 @@ static void MissionTask_RunS3SearchTurn(uint32_t now)
                          vision_search_resume_state ==
                                  MISSION_STATE_S4_TRACK_CENTER
                              ? "04"
-                             : "03",
+                             : (vision_search_resume_state ==
+                                        MISSION_STATE_S7_SEARCH_RED
+                                    ? "07"
+                                    : "03"),
                          (int)mission_snapshot.vision_x_error_px,
                          (int)mission_snapshot.vision_y_error_px);
     return;
@@ -1312,7 +1446,9 @@ static void MissionTask_RunS3SearchTurn(uint32_t now)
         "[V-SEARCH] source=%s FORWARD DONE, START CW90\r\n",
         vision_search_resume_state == MISSION_STATE_S4_TRACK_CENTER
             ? "04"
-            : "03");
+            : (vision_search_resume_state == MISSION_STATE_S7_SEARCH_RED
+                   ? "07"
+                   : "03"));
   }
 
   if ((uint32_t)(now - mission_snapshot.state_entry_tick) >=
@@ -1323,13 +1459,24 @@ static void MissionTask_RunS3SearchTurn(uint32_t now)
                          vision_search_resume_state ==
                                  MISSION_STATE_S4_TRACK_CENTER
                              ? "04"
-                             : "03",
+                             : (vision_search_resume_state ==
+                                        MISSION_STATE_S7_SEARCH_RED
+                                    ? "07"
+                                    : "03"),
                          (long)MissionTask_WrapYaw(mission_snapshot.yaw_cdeg),
                          (long)s3_search_yaw_target_cdeg);
-    mission_snapshot.fault_flags |=
-        vision_search_resume_state == MISSION_STATE_S4_TRACK_CENTER
-            ? MISSION_FAULT_S4_TIMEOUT
-            : MISSION_FAULT_S3_TIMEOUT;
+    if (vision_search_resume_state == MISSION_STATE_S4_TRACK_CENTER)
+    {
+      mission_snapshot.fault_flags |= MISSION_FAULT_S4_TIMEOUT;
+    }
+    else if (vision_search_resume_state == MISSION_STATE_S7_SEARCH_RED)
+    {
+      mission_snapshot.fault_flags |= MISSION_FAULT_S7_TIMEOUT;
+    }
+    else
+    {
+      mission_snapshot.fault_flags |= MISSION_FAULT_S3_TIMEOUT;
+    }
     MissionTask_EnterState(MISSION_STATE_FAULT, now);
     return;
   }
@@ -1382,17 +1529,29 @@ static void MissionTask_RunS3SearchTurn(uint32_t now)
           s4_next_debug_tick = now;
           MissionTask_EnterState(MISSION_STATE_S4_TRACK_CENTER, now);
         }
+        else if (vision_search_resume_state == MISSION_STATE_S7_SEARCH_RED)
+        {
+          MissionTask_CompleteS7RedRecovery(now);
+        }
         else
         {
           s3_search_sweep_completed = true;
           s3_target_lost_since = now;
           MissionTask_EnterState(MISSION_STATE_S3_ALIGN_GREEN, now);
         }
-        (void)DebugUart_Logf(
-            "[V-SEARCH] source=%s CCW180 DONE, WAIT COORDINATES\r\n",
-            vision_search_resume_state == MISSION_STATE_S4_TRACK_CENTER
-                ? "04"
-                : "03");
+        if (vision_search_resume_state == MISSION_STATE_S7_SEARCH_RED)
+        {
+          (void)DebugUart_Log(
+              "[V-SEARCH] source=07 CCW180 DONE, RED NOT FOUND\r\n");
+        }
+        else
+        {
+          (void)DebugUart_Logf(
+              "[V-SEARCH] source=%s CCW180 DONE, WAIT COORDINATES\r\n",
+              vision_search_resume_state == MISSION_STATE_S4_TRACK_CENTER
+                  ? "04"
+                  : "03");
+        }
       }
       return;
     }
@@ -1428,6 +1587,11 @@ static int16_t MissionTask_CalculateVisionForward(uint32_t now,
                                                   int16_t error_px)
 {
   float error = (float)error_px;
+  float min_forward_rpm =
+      ((mission_snapshot.state == MISSION_STATE_S3_TRACK_GREEN) ||
+       (mission_snapshot.state == MISSION_STATE_S4_TRACK_CENTER))
+          ? ROBOT_VISION_03_04_MIN_FORWARD_RPM
+          : ROBOT_VISION_Y_MIN_FORWARD_RPM;
   float dt_seconds;
   float derivative;
   float magnitude;
@@ -1469,11 +1633,11 @@ static int16_t MissionTask_CalculateVisionForward(uint32_t now,
   signed_output = s3_y_pid_output * (float)ROBOT_VISION_Y_FORWARD_SIGN;
   magnitude = signed_output < 0.0f ? -signed_output : signed_output;
   if ((magnitude > 0.0f) &&
-      (magnitude < ROBOT_VISION_Y_MIN_FORWARD_RPM))
+      (magnitude < min_forward_rpm))
   {
     signed_output = signed_output < 0.0f
-                        ? -ROBOT_VISION_Y_MIN_FORWARD_RPM
-                        : ROBOT_VISION_Y_MIN_FORWARD_RPM;
+                        ? -min_forward_rpm
+                        : min_forward_rpm;
   }
 
   return (int16_t)(signed_output >= 0.0f
@@ -1638,14 +1802,20 @@ static void MissionTask_CommandS4CenterFollow(uint32_t now)
 static void MissionTask_CommandS4CornerPush(uint32_t now,
                                              bool push_right)
 {
+  int16_t forward_rpm =
+      (!push_right &&
+       ((uint32_t)(now - mission_snapshot.state_entry_tick) <
+        ROBOT_S4_LEFT_CORNER_INITIAL_MS))
+          ? ROBOT_S4_LEFT_CORNER_INITIAL_RPM
+          : ROBOT_S4_CORNER_PUSH_RPM;
   int16_t wheel_diff_rpm =
       push_right ? ROBOT_S4_RIGHT_CORNER_WHEEL_DIFF_RPM
                  : ROBOT_S4_LEFT_CORNER_WHEEL_DIFF_RPM;
   int16_t faster_rpm =
-      (int16_t)(ROBOT_S4_CORNER_PUSH_RPM +
+      (int16_t)(forward_rpm +
                 ((wheel_diff_rpm + 1) / 2));
   int16_t slower_rpm =
-      (int16_t)(ROBOT_S4_CORNER_PUSH_RPM -
+      (int16_t)(forward_rpm -
                 (wheel_diff_rpm / 2));
   int16_t left_rpm = push_right ? faster_rpm : slower_rpm;
   int16_t right_rpm = push_right ? slower_rpm : faster_rpm;
@@ -1653,7 +1823,7 @@ static void MissionTask_CommandS4CornerPush(uint32_t now,
   mission_snapshot.vision_turn_rpm =
       push_right ? (int16_t)(wheel_diff_rpm / 2)
                  : (int16_t)-(wheel_diff_rpm / 2);
-  mission_snapshot.vision_forward_rpm = ROBOT_S4_CORNER_PUSH_RPM;
+  mission_snapshot.vision_forward_rpm = forward_rpm;
   MissionTask_SetWheelTargets(left_rpm, right_rpm);
 
   if ((int32_t)(now - s4_next_debug_tick) >= 0)
@@ -1705,7 +1875,11 @@ static void MissionTask_RunS3Track(uint32_t now)
           "[S3-T] TARGET LOST %lums, START COMMON RECOVERY\r\n",
           (unsigned long)ROBOT_S3_GREEN_WAIT_MS);
       MissionTask_StartVisionSearchRecovery(
-          now, MISSION_STATE_S3_ALIGN_GREEN, s3_search_origin_yaw_cdeg);
+          now,
+          s3_target_select_command == MAIXCAM_COMMAND_SELECT_RED
+              ? MISSION_STATE_S7_SEARCH_RED : MISSION_STATE_S3_ALIGN_GREEN,
+          s3_target_select_command == MAIXCAM_COMMAND_SELECT_RED
+              ? mission_snapshot.yaw_cdeg : s3_search_origin_yaw_cdeg);
       return;
     }
     MissionTask_DebugS3(now);
@@ -2013,6 +2187,12 @@ static void MissionTask_StartS4FinalRecovery(uint32_t now)
   MissionTask_StopWheels();
   MissionTask_ResetVisionPid();
   s4_final_turn_stable_since = 0U;
+  s4_final_first_yaw_cdeg = MissionTask_WrapYaw(
+      mission_snapshot.safe_zone_yaw_target_cdeg +
+      ROBOT_S4_FINAL_RECOVERY_FIRST_SAFE_OFFSET_CDEG);
+  s4_final_second_yaw_cdeg = MissionTask_WrapYaw(
+      mission_snapshot.safe_zone_yaw_target_cdeg +
+      ROBOT_S4_FINAL_RECOVERY_SECOND_SAFE_OFFSET_CDEG);
   ++s4_final_recovery_count;
   MissionTask_EnterState(
       MISSION_STATE_S4_FINAL_RECOVERY_REVERSE, now);
@@ -2022,6 +2202,14 @@ static void MissionTask_StartS4FinalRecovery(uint32_t now)
       (unsigned long)ROBOT_S4_FINAL_MISSING_TIMEOUT_MS,
       ROBOT_S4_FINAL_RECOVERY_REVERSE_RPM,
       (unsigned long)ROBOT_S4_FINAL_RECOVERY_REVERSE_MS);
+  (void)DebugUart_Logf(
+      "[S4-24R] zone=%u team=%u safe_field=%ld side1_field=%ld side2_field=%ld (cdeg)\r\n",
+      (unsigned int)mission_snapshot.start_zone,
+      (unsigned int)mission_snapshot.team,
+      (long)MissionTask_WrapYaw(mission_snapshot.safe_zone_yaw_target_cdeg -
+                               mission_snapshot.yaw_start_cdeg),
+      (long)MissionTask_WrapYaw(s4_final_first_yaw_cdeg - mission_snapshot.yaw_start_cdeg),
+      (long)MissionTask_WrapYaw(s4_final_second_yaw_cdeg - mission_snapshot.yaw_start_cdeg));
 }
 
 static bool MissionTask_TryResumeS4FinalRecovery(uint32_t now)
@@ -2331,18 +2519,39 @@ static void MissionTask_RunS4Arrange(uint32_t now)
         return;
       }
       MissionTask_StopWheels();
-      if (Actuator_SetFrameRaised() != HAL_OK)
+      MaixCam_ClearEvent();
+      MaixCam_ClearObject();
+      mission_snapshot.vision_target_valid = false;
+      MissionTask_EnterState(MISSION_STATE_S4_WAIT_FINAL_READY, now);
+      if (MaixCam_SendCommand(MAIXCAM_COMMAND_LEFT_DONE_ACK) != HAL_OK)
       {
-        mission_snapshot.fault_flags |= MISSION_FAULT_ACTUATOR;
+        mission_snapshot.fault_flags |= MISSION_FAULT_VISION_TX;
         MissionTask_EnterState(MISSION_STATE_FAULT, now);
         return;
       }
-      s4_final_mode_already_active = false;
-      s4_final_event34_pending = false;
-      MissionTask_EnterState(MISSION_STATE_S4_RAISE_FRAME, now);
-      (void)DebugUart_Logf(
-          "[S4] LEFT REVERSE DONE, FRAME UP settle=%lums\r\n",
-          (unsigned long)ROBOT_S4_FRAME_RAISE_SETTLE_MS);
+      (void)DebugUart_Log(
+          "[S4] 12 COMPLETE, TX E1 E2 22 1E 2E, FRAME DOWN WAIT RX24\r\n");
+      break;
+
+    case MISSION_STATE_S4_WAIT_FINAL_READY:
+      MissionTask_StopWheels();
+      if (MaixCam_TakeEvent(&event_code))
+      {
+        if (event_code == MAIXCAM_EVENT_SKIP_TO_FINAL_TRACK)
+        {
+          MissionTask_SkipToS4FinalTrack(now);
+          return;
+        }
+        (void)DebugUart_Logf(
+            "[S4] RX EVENT %02X, WAIT RX24 AFTER TX22\r\n",
+            (unsigned int)event_code);
+      }
+      if (elapsed >= ROBOT_S4_HANDSHAKE_TIMEOUT_MS)
+      {
+        mission_snapshot.fault_flags |= MISSION_FAULT_S4_TIMEOUT;
+        MissionTask_EnterState(MISSION_STATE_FAULT, now);
+        (void)DebugUart_Log("[S4] WAIT RX24 AFTER TX22 TIMEOUT\r\n");
+      }
       break;
 
     case MISSION_STATE_S4_ARRANGE_RECOVERY_REVERSE:
@@ -2532,8 +2741,9 @@ static void MissionTask_RunS4Arrange(uint32_t now)
       s4_next_debug_tick = now;
       MissionTask_EnterState(
           MISSION_STATE_S4_FINAL_RECOVERY_TURN_270, now);
-      (void)DebugUart_Log(
-          "[S4-24R] REVERSE DONE, FORCE LEFT TO YAW 270\r\n");
+      (void)DebugUart_Logf(
+          "[S4-24R] REVERSE DONE, FORCE LEFT TO SIDE1 raw_cdeg=%ld\r\n",
+          (long)s4_final_first_yaw_cdeg);
       break;
 
     case MISSION_STATE_S4_FINAL_RECOVERY_TURN_270:
@@ -2542,7 +2752,7 @@ static void MissionTask_RunS4Arrange(uint32_t now)
         return;
       }
       if (MissionTask_RunS4ForcedLeftTurn(
-              now, ROBOT_S4_FINAL_RECOVERY_TURN_270_CDEG))
+              now, s4_final_first_yaw_cdeg))
       {
         MissionTask_StopWheels();
         MissionTask_ResetS6ControllerState();
@@ -2550,8 +2760,9 @@ static void MissionTask_RunS4Arrange(uint32_t now)
         s6_next_debug_tick = now;
         MissionTask_EnterState(
             MISSION_STATE_S4_FINAL_RECOVERY_TURN_90, now);
-        (void)DebugUart_Log(
-            "[S4-24R] YAW270 DONE, TURN TO YAW90\r\n");
+        (void)DebugUart_Logf(
+            "[S4-24R] SIDE1 DONE, TURN TO SIDE2 raw_cdeg=%ld\r\n",
+            (long)s4_final_second_yaw_cdeg);
       }
       break;
 
@@ -2561,7 +2772,7 @@ static void MissionTask_RunS4Arrange(uint32_t now)
         return;
       }
       if (MissionTask_RunS6TurnToHeading(
-              now, ROBOT_S4_FINAL_RECOVERY_TURN_90_CDEG))
+              now, s4_final_second_yaw_cdeg))
       {
         MissionTask_StopWheels();
         MissionTask_ResetS6ControllerState();
@@ -2573,7 +2784,7 @@ static void MissionTask_RunS4Arrange(uint32_t now)
         MissionTask_EnterState(
             MISSION_STATE_S4_TRACK_FINAL_BLOCK, now);
         (void)DebugUart_Log(
-            "[S4-24R] YAW90 DONE, RESUME 24 WAIT COORDS\r\n");
+            "[S4-24R] SIDE2 DONE, RESUME 24 WAIT COORDS\r\n");
       }
       break;
 
@@ -2735,6 +2946,8 @@ static void MissionTask_RunS5WaitSingleGreen(uint32_t now)
   s6_next_debug_tick = now;
   s6_missing_since = 0U;
   s6_search_start_tick = now;
+  s6_track_elapsed_ms = 0U;
+  s6_track_accounting_tick = now;
   s6_recovery_count = 0U;
   MissionTask_EnterState(MISSION_STATE_S6_SEARCH_SAFE_ZONE, now);
   (void)DebugUart_Logf(
@@ -2746,21 +2959,97 @@ static void MissionTask_RunS5WaitSingleGreen(uint32_t now)
       (unsigned long)ROBOT_S6_SEARCH_TIMEOUT_MS);
 }
 
+static bool MissionTask_S6IsSupplyTarget(void)
+{
+  return (s3_target_select_command == MAIXCAM_COMMAND_SELECT_GREEN) ||
+         (s3_target_select_command == MAIXCAM_COMMAND_SELECT_BLUE) ||
+         (s3_target_select_command == MAIXCAM_COMMAND_SELECT_BLACK);
+}
+
+typedef struct
+{
+  uint8_t start_zone;
+  uint8_t team;
+  uint8_t target_kind;
+  uint8_t enabled;
+  int32_t sector_start_cdeg;
+  int32_t sector_end_cdeg;
+  int32_t side_heading_cdeg;
+  uint8_t include_start;
+  uint8_t include_end;
+} MissionSideRule;
+
+static const MissionSideRule s6_side_rules[] = { ROBOT_S6_SIDE_RULE_ROWS };
+
+static const MissionSideRule *MissionTask_GetS6SideRule(void)
+{
+  uint32_t i;
+  uint8_t kind;
+
+  if (MissionTask_S6IsSupplyTarget())
+  {
+    kind = 0U;
+  }
+  else if (s3_target_select_command == MAIXCAM_COMMAND_SELECT_RED)
+  {
+    kind = 1U;
+  }
+  else
+  {
+    return NULL;
+  }
+  for (i = 0U; i < sizeof(s6_side_rules) / sizeof(s6_side_rules[0]); ++i)
+  {
+    const MissionSideRule *rule = &s6_side_rules[i];
+    if (rule->enabled && (rule->start_zone == mission_snapshot.start_zone) &&
+        (rule->team == mission_snapshot.team) && (rule->target_kind == kind))
+    {
+      return rule;
+    }
+  }
+  return NULL;
+}
+
 static bool MissionTask_S6NeedsSideReposition(void)
 {
+  const MissionSideRule *rule = MissionTask_GetS6SideRule();
   int32_t yaw_error = MissionTask_YawError(
       mission_snapshot.safe_zone_yaw_target_cdeg,
       mission_snapshot.yaw_cdeg);
 
-  /* Example: start zone 4 / blue has safe heading 180 degrees. Yaw in
-     (180, 270] produces an error in [-90, 0), so reposition sideways first.
-     The same relative sector applies to every mapped safe-zone heading. */
+  if (rule != NULL)
+  {
+    int32_t yaw_from_start = MissionTask_WrapYaw(
+        mission_snapshot.yaw_cdeg - mission_snapshot.yaw_start_cdeg);
+    int32_t span = MissionTask_WrapYaw(
+        rule->sector_end_cdeg - rule->sector_start_cdeg);
+    int32_t position = MissionTask_WrapYaw(
+        yaw_from_start - rule->sector_start_cdeg);
+    return ((position > 0L) || rule->include_start) &&
+           ((position < span) || ((position == span) && rule->include_end));
+  }
+  /* Compatibility fallback until this zone/team has been calibrated. */
+  if (MissionTask_S6IsSupplyTarget())
+  {
+    return (yaw_error > 0L) &&
+           (yaw_error <= ROBOT_S6_REPOSITION_SECTOR_CDEG);
+  }
+  if (s3_target_select_command == MAIXCAM_COMMAND_SELECT_RED)
+  {
+    return (yaw_error < 0L) &&
+           (yaw_error >= -ROBOT_S6_REPOSITION_SECTOR_CDEG);
+  }
+  /* Unclassified targets retain the earlier sector/tolerance policy. */
   return (yaw_error < -ROBOT_S6_REPOSITION_MIN_OFFSET_CDEG) &&
          (yaw_error >= -ROBOT_S6_REPOSITION_SECTOR_CDEG);
 }
 
 static void MissionTask_StartS6SideReposition(uint32_t now)
 {
+  const MissionSideRule *rule = MissionTask_GetS6SideRule();
+  int32_t current_relative_cdeg;
+  int32_t target_relative_cdeg;
+  int32_t safe_relative_cdeg;
   MissionTask_StopWheels();
   MaixCam_ClearObject();
   mission_snapshot.vision_target_valid = false;
@@ -2769,19 +3058,49 @@ static void MissionTask_StartS6SideReposition(uint32_t now)
   s6_phase_stable_since = 0U;
   s6_reposition_x_stable_since = 0U;
   s6_approach_start_tick = now;
-  s6_reposition_side_yaw_cdeg = MissionTask_WrapYaw(
+  s6_reposition_side_yaw_cdeg = rule != NULL
+      ? MissionTask_WrapYaw(mission_snapshot.yaw_start_cdeg +
+                           rule->side_heading_cdeg)
+      : MissionTask_WrapYaw(
       mission_snapshot.safe_zone_yaw_target_cdeg +
-      (int32_t)ROBOT_YAW_LEFT_SIGN *
+      (MissionTask_S6IsSupplyTarget() ? -1L : 1L) *
           ROBOT_S6_REPOSITION_SECTOR_CDEG);
   ++s6_reposition_count;
   s6_next_debug_tick = now;
   MissionTask_EnterState(MISSION_STATE_S6_REPOSITION_TURN_SIDE, now);
   (void)DebugUart_Logf(
-      "[S6-P] START #%u yaw=%ld safe=%ld side=%ld\r\n",
+      "[S6-P] START #%u yaw=%ld safe=%ld side=%ld target=%02X kind=%s "
+      "zone=%u team=%u rule=%s\r\n",
       (unsigned int)s6_reposition_count,
       (long)MissionTask_WrapYaw(mission_snapshot.yaw_cdeg),
       (long)mission_snapshot.safe_zone_yaw_target_cdeg,
-      (long)s6_reposition_side_yaw_cdeg);
+      (long)s6_reposition_side_yaw_cdeg,
+      (unsigned int)s3_target_select_command,
+      MissionTask_S6IsSupplyTarget() ? "SUPPLY" :
+          (s3_target_select_command == MAIXCAM_COMMAND_SELECT_RED
+               ? "CASUALTY" : "LEGACY"),
+      (unsigned int)mission_snapshot.start_zone,
+      (unsigned int)mission_snapshot.team,
+      rule != NULL ? "CALIBRATED" : "FALLBACK");
+  current_relative_cdeg = MissionTask_WrapYaw(
+      mission_snapshot.yaw_cdeg - mission_snapshot.yaw_start_cdeg);
+  target_relative_cdeg = MissionTask_WrapYaw(
+      s6_reposition_side_yaw_cdeg - mission_snapshot.yaw_start_cdeg);
+  safe_relative_cdeg = MissionTask_WrapYaw(
+      mission_snapshot.safe_zone_yaw_target_cdeg - mission_snapshot.yaw_start_cdeg);
+  (void)DebugUart_Logf(
+      "[S6-P-ANGLE] relative_deg current=%ld.%02ld target=%ld.%02ld safe=%ld.%02ld\r\n",
+      (long)(current_relative_cdeg / 100L),
+      (long)(current_relative_cdeg % 100L),
+      (long)(target_relative_cdeg / 100L),
+      (long)(target_relative_cdeg % 100L),
+      (long)(safe_relative_cdeg / 100L),
+      (long)(safe_relative_cdeg % 100L));
+  (void)DebugUart_Logf(
+      "[S6-P-ANGLE] raw_cdeg current=%ld target=%ld zero=%ld\r\n",
+      (long)MissionTask_WrapYaw(mission_snapshot.yaw_cdeg),
+      (long)s6_reposition_side_yaw_cdeg,
+      (long)mission_snapshot.yaw_start_cdeg);
 }
 
 static void MissionTask_StartS6VisionApproach(uint32_t now)
@@ -3045,9 +3364,12 @@ static bool MissionTask_RunS6TurnToHeading(uint32_t now,
 {
   int32_t absolute_yaw_error;
   int16_t turn_rpm;
+  bool exit_turn = mission_snapshot.state == MISSION_STATE_S6_EXIT_TURN_180;
+  uint32_t timeout_ms = exit_turn ? ROBOT_S6_EXIT_TURN_TIMEOUT_MS
+                                  : ROBOT_S6_TURN_TIMEOUT_MS;
 
   if ((uint32_t)(now - mission_snapshot.state_entry_tick) >=
-      ROBOT_S6_TURN_TIMEOUT_MS)
+      timeout_ms)
   {
     mission_snapshot.fault_flags |= MISSION_FAULT_S6_TIMEOUT;
     MissionTask_EnterState(MISSION_STATE_FAULT, now);
@@ -3055,6 +3377,17 @@ static bool MissionTask_RunS6TurnToHeading(uint32_t now,
   }
 
   turn_rpm = MissionTask_CalculateS6YawTurn(now, target_yaw_cdeg);
+  if (exit_turn)
+  {
+    if (turn_rpm > ROBOT_S6_EXIT_TURN_MAX_RPM)
+    {
+      turn_rpm = ROBOT_S6_EXIT_TURN_MAX_RPM;
+    }
+    else if (turn_rpm < -ROBOT_S6_EXIT_TURN_MAX_RPM)
+    {
+      turn_rpm = -ROBOT_S6_EXIT_TURN_MAX_RPM;
+    }
+  }
   absolute_yaw_error = MissionTask_Abs32(
       mission_snapshot.safe_zone_yaw_error_cdeg);
 
@@ -3232,6 +3565,12 @@ static void MissionTask_RunS6SideReposition(uint32_t now)
             "[S6-P] SIDE ALIGNED, FORWARD rpm=%d time=%lums\r\n",
             ROBOT_S6_REPOSITION_FORWARD_RPM,
             (unsigned long)ROBOT_S6_REPOSITION_FORWARD_MS);
+        (void)DebugUart_Logf(
+            "[S6-P-ANGLE] TURN DONE current_relative_cdeg=%ld target_relative_cdeg=%ld\r\n",
+            (long)MissionTask_WrapYaw(
+                mission_snapshot.yaw_cdeg - mission_snapshot.yaw_start_cdeg),
+            (long)MissionTask_WrapYaw(
+                s6_reposition_side_yaw_cdeg - mission_snapshot.yaw_start_cdeg));
       }
       break;
 
@@ -3348,6 +3687,12 @@ static bool MissionTask_TryFinishS6Recovery(uint32_t now)
     if (event_code == MAIXCAM_EVENT_SAFE_ZONE_FOUND)
     {
       MissionTask_EnterS6TrackingFrom16(now);
+      return true;
+    }
+    if (s6_recovery_from_tracking &&
+        (event_code == MAIXCAM_EVENT_SAFE_ZONE_OBSTACLE))
+    {
+      MissionTask_StartS6ObstacleAvoidance(now);
       return true;
     }
     if (s6_recovery_from_tracking &&
@@ -3522,6 +3867,124 @@ static void MissionTask_RunS6Recovery(uint32_t now)
   }
 }
 
+static void MissionTask_StartS6ObstacleAvoidance(uint32_t now)
+{
+  MissionTask_StopWheels();
+  s6_obstacle_left_yaw_cdeg = MissionTask_WrapYaw(
+      mission_snapshot.yaw_cdeg + (int32_t)ROBOT_YAW_LEFT_SIGN *
+          ROBOT_S6_OBSTACLE_LEFT_ANGLE_CDEG);
+  MaixCam_ClearObject();
+  mission_snapshot.vision_target_valid = false;
+  MissionTask_ResetVisionPid();
+  MissionTask_ResetS6ControllerState();
+  s6_phase_stable_since = 0U;
+  s6_next_debug_tick = now;
+  MissionTask_EnterState(MISSION_STATE_S6_OBSTACLE_TURN_LEFT, now);
+  (void)DebugUart_Logf(
+      "[S6-O] RX36 LEFT45 target=%ld safe=%ld, fwd=%d/%lums reverse=%d/%lums\r\n",
+      (long)s6_obstacle_left_yaw_cdeg,
+      (long)mission_snapshot.safe_zone_yaw_target_cdeg,
+      ROBOT_S6_OBSTACLE_DRIVE_RPM,
+      (unsigned long)ROBOT_S6_OBSTACLE_FORWARD_MS,
+      ROBOT_S6_OBSTACLE_DRIVE_RPM,
+      (unsigned long)ROBOT_S6_OBSTACLE_REVERSE_MS);
+}
+
+static void MissionTask_RunS6ObstacleAvoidance(uint32_t now)
+{
+  uint32_t elapsed = (uint32_t)(now - mission_snapshot.state_entry_tick);
+
+  switch (mission_snapshot.state)
+  {
+    case MISSION_STATE_S6_OBSTACLE_TURN_LEFT:
+      if (!MissionTask_RunS6TurnToHeading(now, s6_obstacle_left_yaw_cdeg))
+      {
+        return;
+      }
+      MissionTask_StopWheels();
+      MissionTask_ResetS6ControllerState();
+      s6_phase_stable_since = 0U;
+      MissionTask_EnterState(MISSION_STATE_S6_OBSTACLE_FORWARD, now);
+      break;
+
+    case MISSION_STATE_S6_OBSTACLE_FORWARD:
+      if (elapsed < ROBOT_S6_OBSTACLE_FORWARD_MS)
+      {
+        MissionTask_SetWheelTargets(ROBOT_S6_OBSTACLE_DRIVE_RPM,
+                                    ROBOT_S6_OBSTACLE_DRIVE_RPM);
+        return;
+      }
+      MissionTask_StopWheels();
+      MissionTask_EnterState(MISSION_STATE_S6_OBSTACLE_REVERSE, now);
+      break;
+
+    case MISSION_STATE_S6_OBSTACLE_REVERSE:
+      if (elapsed < ROBOT_S6_OBSTACLE_REVERSE_MS)
+      {
+        MissionTask_SetWheelTargets(-ROBOT_S6_OBSTACLE_DRIVE_RPM,
+                                    -ROBOT_S6_OBSTACLE_DRIVE_RPM);
+        return;
+      }
+      MissionTask_StopWheels();
+      MissionTask_ResetS6ControllerState();
+      s6_phase_stable_since = 0U;
+      MissionTask_EnterState(MISSION_STATE_S6_OBSTACLE_FACE_SAFE, now);
+      (void)DebugUart_Logf("[S6-O] REVERSE DONE, FACE SAFE yaw=%ld\r\n",
+          (long)mission_snapshot.safe_zone_yaw_target_cdeg);
+      break;
+
+    case MISSION_STATE_S6_OBSTACLE_FACE_SAFE:
+      if (!MissionTask_RunS6TurnToHeading(
+              now, mission_snapshot.safe_zone_yaw_target_cdeg))
+      {
+        return;
+      }
+      MissionTask_StopWheels();
+      /* Drop observations/events from the maneuver before acknowledging it. */
+      MaixCam_ClearEvent();
+      MaixCam_ClearObject();
+      mission_snapshot.vision_target_valid = false;
+      if (MaixCam_SendCommand(MAIXCAM_COMMAND_OBSTACLE_DONE_ACK) != HAL_OK)
+      {
+        mission_snapshot.fault_flags |= MISSION_FAULT_VISION_TX;
+        MissionTask_EnterState(MISSION_STATE_FAULT, now);
+        return;
+      }
+      s6_pre_reposition_decision_pending = false;
+      s6_pre_reposition_track_start_tick = 0U;
+      MissionTask_StartS6VisionApproach(now);
+      (void)DebugUart_Log(
+          "[S6-O] DONE TX E1 E2 36 1E 2E, WAIT FRESH SAFE COORDINATES\r\n");
+      break;
+
+    default:
+      break;
+  }
+}
+
+static void MissionTask_RunS6TrackTimeoutReverse(uint32_t now)
+{
+  if (mission_snapshot.state != MISSION_STATE_S6_TRACK_TIMEOUT_REVERSE)
+  {
+    return;
+  }
+  if ((uint32_t)(now - mission_snapshot.state_entry_tick) <
+      ROBOT_S6_TRACK_REVERSE_MS)
+  {
+    MissionTask_SetWheelTargets(-ROBOT_S6_TRACK_REVERSE_RPM,
+                                -ROBOT_S6_TRACK_REVERSE_RPM);
+    return;
+  }
+  MissionTask_StopWheels();
+  MaixCam_ClearObject();
+  mission_snapshot.vision_target_valid = false;
+  s6_track_elapsed_ms = 0U;
+  s6_track_accounting_tick = now;
+  s6_pre_reposition_track_start_tick = 0U;
+  MissionTask_StartS6VisionApproach(now);
+  (void)DebugUart_Log("[S6-8S] REVERSE DONE, RESUME 16 TRACK\r\n");
+}
+
 static void MissionTask_RunS6TrackSafeZone(uint32_t now)
 {
   uint8_t event_code;
@@ -3535,8 +3998,16 @@ static void MissionTask_RunS6TrackSafeZone(uint32_t now)
     return;
   }
 
-  if (MaixCam_TakeEvent(&event_code) &&
-      (event_code == MAIXCAM_EVENT_SAFE_ZONE_ALIGN_READY))
+  if (!MaixCam_TakeEvent(&event_code))
+  {
+    event_code = 0U;
+  }
+  if (event_code == MAIXCAM_EVENT_SAFE_ZONE_OBSTACLE)
+  {
+    MissionTask_StartS6ObstacleAvoidance(now);
+    return;
+  }
+  if (event_code == MAIXCAM_EVENT_SAFE_ZONE_ALIGN_READY)
   {
     s6_push_yaw_target_cdeg =
         MissionTask_WrapYaw(mission_snapshot.safe_zone_yaw_target_cdeg);
@@ -3551,6 +4022,22 @@ static void MissionTask_RunS6TrackSafeZone(uint32_t now)
     s6_phase_stable_since = 0U;
     s6_next_debug_tick = now;
     MissionTask_EnterState(MISSION_STATE_S6_FINAL_ALIGN, now);
+    return;
+  }
+
+  if (s6_track_elapsed_ms >= ROBOT_S6_TRACK_REVERSE_INTERVAL_MS)
+  {
+    MissionTask_StopWheels();
+    MissionTask_ResetVisionControllerState();
+    MissionTask_ResetS6ControllerState();
+    MaixCam_ClearObject();
+    mission_snapshot.vision_target_valid = false;
+    MissionTask_EnterState(MISSION_STATE_S6_TRACK_TIMEOUT_REVERSE, now);
+    (void)DebugUart_Logf(
+        "[S6-8S] TRACK TOTAL=%lums (RECOVERY EXCLUDED), REVERSE rpm=%d time=%lums\r\n",
+        (unsigned long)s6_track_elapsed_ms,
+        ROBOT_S6_TRACK_REVERSE_RPM,
+        (unsigned long)ROBOT_S6_TRACK_REVERSE_MS);
     return;
   }
 
@@ -3845,15 +4332,23 @@ static void MissionTask_RunS6FinalReverse(uint32_t now)
     s6_exit_yaw_target_cdeg = MissionTask_WrapYaw(
         s6_push_yaw_target_cdeg +
         (int32_t)ROBOT_YAW_LEFT_SIGN * ROBOT_S6_EXIT_TURN_ANGLE_CDEG);
+    /* Begin the next vision search before turning so coordinates can interrupt. */
+    MissionTask_StartS7Decision(now);
+    if (mission_snapshot.state == MISSION_STATE_FAULT)
+    {
+      return;
+    }
     MissionTask_ResetS6ControllerState();
     s6_phase_stable_since = 0U;
     s6_next_debug_tick = now;
     MissionTask_EnterState(MISSION_STATE_S6_EXIT_TURN_180, now);
     (void)DebugUart_Logf(
-        "[S6] REVERSE DONE rpm=%d time=%lums, TURN180 target=%ld\r\n",
+        "[S6] REVERSE DONE rpm=%d time=%lums, 07 SEARCH ACTIVE, "
+        "TURN180 target=%ld max=%d, COORDINATES INTERRUPT\r\n",
         ROBOT_S6_REVERSE_RPM,
         (unsigned long)ROBOT_S6_REVERSE_DRIVE_MS,
-        (long)s6_exit_yaw_target_cdeg);
+        (long)s6_exit_yaw_target_cdeg,
+        ROBOT_S6_EXIT_TURN_MAX_RPM);
     return;
   }
 
@@ -3863,10 +4358,314 @@ static void MissionTask_RunS6FinalReverse(uint32_t now)
                                 ROBOT_S6_REVERSE_WHEEL_MAX_RPM);
 }
 
+static void MissionTask_CompleteS7RedRecovery(uint32_t now)
+{
+  MissionTask_StopWheels();
+  MissionTask_ResetVisionControllerState();
+  MaixCam_ClearEvent();
+  MaixCam_ClearObject();
+  mission_snapshot.vision_target_valid = false;
+
+  if (MaixCam_SendCommand(MAIXCAM_COMMAND_RED_SEARCH_DONE) != HAL_OK)
+  {
+    mission_snapshot.fault_flags |= MISSION_FAULT_VISION_TX;
+    MissionTask_EnterState(MISSION_STATE_FAULT, now);
+    return;
+  }
+
+  MissionTask_EnterState(MISSION_STATE_S7_WAIT_SECOND_E3, now);
+  (void)DebugUart_Log(
+      "[S7] RED RECOVERY DONE, TX E1 E2 13 1E 2E, WAIT SECOND E3\r\n");
+}
+
+static void MissionTask_StartS7Decision(uint32_t now)
+{
+  MissionTask_StopWheels();
+  MissionTask_ResetVisionControllerState();
+  MaixCam_ClearEvent();
+  MaixCam_ClearObject();
+  mission_snapshot.vision_target_valid = false;
+
+  if ((MaixCam_SendCommand(MAIXCAM_COMMAND_SELECT_RED) != HAL_OK) ||
+      (MaixCam_SendCommand(MAIXCAM_COMMAND_SEARCH_TARGET) != HAL_OK))
+  {
+    mission_snapshot.fault_flags |= MISSION_FAULT_VISION_TX;
+    MissionTask_EnterState(MISSION_STATE_FAULT, now);
+    return;
+  }
+
+  MissionTask_EnterState(MISSION_STATE_S7_SEARCH_RED, now);
+  (void)DebugUart_Log(
+      "[S7] TX E1 E2 11 1E 2E, TX E1 E2 03 1E 2E, SEARCH RED\r\n");
+}
+
+static void MissionTask_StartBlackFinalTrack(uint32_t now)
+{
+  MissionTask_StopWheels();
+  MissionTask_ResetVisionControllerState();
+  MaixCam_ClearEvent();
+  MaixCam_ClearObject();
+  mission_snapshot.vision_target_valid = false;
+  s3_target_select_command = MAIXCAM_COMMAND_SELECT_BLACK;
+  s4_final_mode_already_active = false;
+  s4_final_event34_pending = false;
+  s4_final_missing_since = 0U;
+  s4_final_turn_stable_since = 0U;
+  s4_final_recovery_count = 0U;
+
+  if ((Actuator_SetFrameRaised() != HAL_OK) ||
+      (Actuator_SetCameraWideView() != HAL_OK))
+  {
+    mission_snapshot.fault_flags |= MISSION_FAULT_ACTUATOR;
+    MissionTask_EnterState(MISSION_STATE_FAULT, now);
+    return;
+  }
+  if (MaixCam_SendCommand(MAIXCAM_COMMAND_SELECT_BLACK) != HAL_OK)
+  {
+    mission_snapshot.fault_flags |= MISSION_FAULT_VISION_TX;
+    MissionTask_EnterState(MISSION_STATE_FAULT, now);
+    return;
+  }
+
+  /* S4_RAISE_FRAME sends 24 after settling when final mode is not yet active. */
+  MissionTask_EnterState(MISSION_STATE_S4_RAISE_FRAME, now);
+  (void)DebugUart_Logf(
+      "[S7-BLACK] TX E1 E2 31 1E 2E, FRAME UP %lums, "
+      "THEN TX24 DIRECT TRACK (SKIP03/04)\r\n",
+      (unsigned long)ROBOT_S4_FRAME_RAISE_SETTLE_MS);
+}
+
+static void MissionTask_SwitchS7ToBlack(uint32_t now)
+{
+  (void)DebugUart_Log("[S7] RX SECOND E3, SELECT BLACK31 AND ENTER24\r\n");
+  MissionTask_StartBlackFinalTrack(now);
+}
+
+static void MissionTask_HandleRedPriorityRequest(uint32_t now)
+{
+  bool can_switch = false;
+  if (!MaixCam_TakeRedPriorityRequest())
+  {
+    return;
+  }
+  if ((mission_snapshot.state == MISSION_STATE_S7_SEARCH_BLACK) ||
+      (((mission_snapshot.state == MISSION_STATE_S7_SILENT_TURN_LEFT) ||
+        (mission_snapshot.state == MISSION_STATE_S7_SILENT_TURN_BACK)) &&
+       (s7_silent_resume_state == MISSION_STATE_S7_SEARCH_BLACK)))
+  {
+    can_switch = true;
+  }
+  else if (s3_target_select_command == MAIXCAM_COMMAND_SELECT_BLACK)
+  {
+    switch (mission_snapshot.state)
+    {
+      case MISSION_STATE_S3_ALIGN_GREEN:
+      case MISSION_STATE_S3_TRACK_GREEN:
+      case MISSION_STATE_S3_LOWER_FRAME:
+      case MISSION_STATE_S3_SEARCH_TURN_CW:
+      case MISSION_STATE_S3_SEARCH_TURN_CCW:
+      case MISSION_STATE_S4_TRACK_CENTER:
+      case MISSION_STATE_S4_RAISE_FRAME:
+      case MISSION_STATE_S4_TRACK_FINAL_BLOCK:
+      case MISSION_STATE_S4_FINAL_RECOVERY_REVERSE:
+      case MISSION_STATE_S4_FINAL_RECOVERY_TURN_270:
+      case MISSION_STATE_S4_FINAL_RECOVERY_TURN_90:
+        can_switch = true;
+        break;
+      default:
+        break;
+    }
+  }
+  if (!can_switch)
+  {
+    (void)DebugUart_Logf("[S7-PRIORITY] RX11 IGNORED state=%u target=%02X\r\n",
+        (unsigned int)mission_snapshot.state, (unsigned int)s3_target_select_command);
+    return;
+  }
+  MissionTask_StopWheels();
+  MissionTask_ResetVisionControllerState();
+  MissionTask_ResetS6ControllerState();
+  MaixCam_ClearEvent();
+  MaixCam_ClearObject();
+  mission_snapshot.vision_target_valid = false;
+  vision_search_forward_active = false;
+  (void)DebugUart_Log(
+      "[S7-PRIORITY] RX F1 F2 11 1F 2F, BLACK31 -> RED11, REUSE CAPTURE FLOW\r\n");
+  (void)MissionTask_StartS3Align(now, MAIXCAM_COMMAND_SELECT_RED);
+}
+
+static void MissionTask_RunS7Decision(uint32_t now)
+{
+  uint8_t event_code;
+
+  if ((mission_snapshot.state != MISSION_STATE_S7_SEARCH_RED) &&
+      (mission_snapshot.state != MISSION_STATE_S7_WAIT_SECOND_E3) &&
+      (mission_snapshot.state != MISSION_STATE_S7_SEARCH_BLACK))
+  {
+    return;
+  }
+
+  MissionTask_StopWheels();
+  if (mission_snapshot.vision_target_valid &&
+      (mission_snapshot.target_sequence != s7_last_coordinate_sequence))
+  {
+    s7_last_coordinate_sequence = mission_snapshot.target_sequence;
+    s7_last_message_tick = now;
+  }
+
+  if (((mission_snapshot.state == MISSION_STATE_S7_SEARCH_RED) ||
+       (mission_snapshot.state == MISSION_STATE_S7_WAIT_SECOND_E3) ||
+       (mission_snapshot.state == MISSION_STATE_S7_SEARCH_BLACK)) &&
+      mission_snapshot.vision_target_valid &&
+      (mission_snapshot.target_id ==
+       (mission_snapshot.state == MISSION_STATE_S7_SEARCH_BLACK ? 6U : 4U)))
+  {
+    uint8_t select_command =
+        mission_snapshot.state == MISSION_STATE_S7_SEARCH_BLACK
+            ? MAIXCAM_COMMAND_SELECT_BLACK
+            : MAIXCAM_COMMAND_SELECT_RED;
+    const char *target_name =
+        select_command == MAIXCAM_COMMAND_SELECT_RED ? "RED" : "BLACK";
+
+    if (select_command == MAIXCAM_COMMAND_SELECT_BLACK)
+    {
+      MissionTask_StartBlackFinalTrack(now);
+      return;
+    }
+    MaixCam_ClearEvent();
+    (void)DebugUart_Logf(
+        "[S7] %s TARGET FOUND id=%u x=%d y=%d, "
+        "REUSE GREEN CAPTURE FLOW\r\n",
+        target_name,
+        (unsigned int)mission_snapshot.target_id,
+        (int)mission_snapshot.vision_x_error_px,
+        (int)mission_snapshot.vision_y_error_px);
+    (void)MissionTask_StartS3Align(now, select_command);
+    return;
+  }
+
+  if (!MaixCam_TakeEvent(&event_code))
+  {
+    if ((uint32_t)(now - s7_last_message_tick) >= ROBOT_S7_SILENT_TIMEOUT_MS)
+    {
+      s7_silent_resume_state = mission_snapshot.state;
+      s7_silent_left_yaw_cdeg = MissionTask_WrapYaw(
+          mission_snapshot.yaw_cdeg + (int32_t)ROBOT_YAW_LEFT_SIGN *
+              ROBOT_S7_SILENT_LEFT_CDEG);
+      s7_silent_right_yaw_cdeg = MissionTask_WrapYaw(
+          s7_silent_left_yaw_cdeg - (int32_t)ROBOT_YAW_LEFT_SIGN *
+              ROBOT_S7_SILENT_RIGHT_CDEG);
+      MissionTask_ResetVisionControllerState();
+      MissionTask_ResetS6ControllerState();
+      s6_phase_stable_since = 0U;
+      s6_next_debug_tick = now;
+      MissionTask_EnterState(MISSION_STATE_S7_SILENT_TURN_LEFT, now);
+      (void)DebugUart_Logf(
+          "[S7-SILENT] NO MESSAGE %lums, LEFT45=%ld THEN RIGHT90=%ld resume=%u\r\n",
+          (unsigned long)ROBOT_S7_SILENT_TIMEOUT_MS,
+          (long)s7_silent_left_yaw_cdeg, (long)s7_silent_right_yaw_cdeg,
+          (unsigned int)s7_silent_resume_state);
+    }
+    return;
+  }
+  s7_last_message_tick = now;
+
+  if (event_code != MAIXCAM_EVENT_SEARCH_TARGET_LOST)
+  {
+    (void)DebugUart_Logf("[S7] RX EVENT %02X, EXPECT E3\r\n",
+                         (unsigned int)event_code);
+    return;
+  }
+
+  if (mission_snapshot.state == MISSION_STATE_S7_SEARCH_RED)
+  {
+    if (mission_snapshot.vision_target_valid)
+    {
+      (void)DebugUart_Log(
+          "[S7] RX E3 WITH FRESH RED COORDINATES, KEEP TARGET\r\n");
+      return;
+    }
+
+    MaixCam_ClearObject();
+    mission_snapshot.vision_target_valid = false;
+    (void)DebugUart_Log(
+        "[S7] RX FIRST E3, START ONE SEARCH RECOVERY\r\n");
+    MissionTask_StartVisionSearchRecovery(
+        now, MISSION_STATE_S7_SEARCH_RED, mission_snapshot.yaw_cdeg);
+    return;
+  }
+
+  if (mission_snapshot.state == MISSION_STATE_S7_WAIT_SECOND_E3)
+  {
+    MissionTask_SwitchS7ToBlack(now);
+    return;
+  }
+
+  (void)DebugUart_Log(
+      "[S7] RX E3 WHILE SEARCHING BLACK, WAIT NEXT BLACK POLICY\r\n");
+}
+
+static void MissionTask_RunS7SilentSearch(uint32_t now)
+{
+  uint8_t expected_id;
+  bool turning_left;
+  if ((mission_snapshot.state != MISSION_STATE_S7_SILENT_TURN_LEFT) &&
+      (mission_snapshot.state != MISSION_STATE_S7_SILENT_TURN_BACK))
+  {
+    return;
+  }
+  expected_id = s7_silent_resume_state == MISSION_STATE_S7_SEARCH_BLACK ? 6U : 4U;
+  if (mission_snapshot.vision_target_valid &&
+      (mission_snapshot.target_id == expected_id))
+  {
+    MissionTask_StopWheels();
+    MissionTask_ResetS6ControllerState();
+    (void)DebugUart_Logf("[S7-SILENT] TARGET FOUND id=%u, STOP TURN AND CAPTURE\r\n",
+                         (unsigned int)expected_id);
+    MissionTask_EnterState(s7_silent_resume_state, now);
+    return;
+  }
+  turning_left = mission_snapshot.state == MISSION_STATE_S7_SILENT_TURN_LEFT;
+  if (!MissionTask_RunS6TurnToHeading(
+          now, turning_left ? s7_silent_left_yaw_cdeg : s7_silent_right_yaw_cdeg))
+  {
+    return;
+  }
+  MissionTask_StopWheels();
+  MissionTask_ResetS6ControllerState();
+  s6_phase_stable_since = 0U;
+  if (turning_left)
+  {
+    MissionTask_EnterState(MISSION_STATE_S7_SILENT_TURN_BACK, now);
+    (void)DebugUart_Log("[S7-SILENT] LEFT45 DONE, START RIGHT90\r\n");
+  }
+  else
+  {
+    MissionTask_EnterState(s7_silent_resume_state, now);
+    (void)DebugUart_Log("[S7-SILENT] RIGHT90 DONE, RESUME 07 WAIT\r\n");
+  }
+}
+
 static void MissionTask_RunS6ExitTurn180(uint32_t now)
 {
   if (mission_snapshot.state != MISSION_STATE_S6_EXIT_TURN_180)
   {
+    return;
+  }
+
+  if (mission_snapshot.vision_target_valid &&
+      (mission_snapshot.target_id == 4U))
+  {
+    MissionTask_StopWheels();
+    MissionTask_ResetS6ControllerState();
+    s6_phase_stable_since = 0U;
+    (void)DebugUart_Logf(
+        "[S7] RED COORDINATES DURING TURN180 yaw=%ld x=%d y=%d, "
+        "STOP TURN AND CAPTURE\r\n",
+        (long)MissionTask_WrapYaw(mission_snapshot.yaw_cdeg),
+        (int)mission_snapshot.vision_x_error_px,
+        (int)mission_snapshot.vision_y_error_px);
+    MissionTask_EnterState(MISSION_STATE_S7_SEARCH_RED, now);
     return;
   }
 
@@ -3876,9 +4675,11 @@ static void MissionTask_RunS6ExitTurn180(uint32_t now)
   }
 
   MissionTask_StopWheels();
-  (void)DebugUart_Logf("[S6] TURN180 DONE yaw=%ld, STOP\r\n",
-                       (long)s6_exit_yaw_target_cdeg);
-  MissionTask_EnterState(MISSION_STATE_S6_SAFE_ZONE_REACHED, now);
+  MaixCam_ClearEvent();
+  MissionTask_EnterState(MISSION_STATE_S7_SEARCH_RED, now);
+  (void)DebugUart_Logf(
+      "[S7] TURN180 DONE yaw=%ld, CONTINUE RED SEARCH, WAIT COORDINATES/E3\r\n",
+      (long)s6_exit_yaw_target_cdeg);
 }
 
 static void MissionTask_ProcessEvents(uint32_t events, uint32_t now)
@@ -3951,12 +4752,22 @@ static void MissionTask_CheckRunningHealth(uint32_t now)
       (mission_snapshot.state != MISSION_STATE_S6_RECOVERY_TURN_BACK) &&
       (mission_snapshot.state != MISSION_STATE_S6_RECOVERY_RETURN_SAFE) &&
       (mission_snapshot.state != MISSION_STATE_S6_TRACK_SAFE_ZONE) &&
+      (mission_snapshot.state != MISSION_STATE_S6_OBSTACLE_TURN_LEFT) &&
+      (mission_snapshot.state != MISSION_STATE_S6_OBSTACLE_FORWARD) &&
+      (mission_snapshot.state != MISSION_STATE_S6_OBSTACLE_REVERSE) &&
+      (mission_snapshot.state != MISSION_STATE_S6_OBSTACLE_FACE_SAFE) &&
+      (mission_snapshot.state != MISSION_STATE_S6_TRACK_TIMEOUT_REVERSE) &&
       (mission_snapshot.state != MISSION_STATE_S6_FINAL_ALIGN) &&
       (mission_snapshot.state != MISSION_STATE_S6_RAISE_FRAME) &&
       (mission_snapshot.state != MISSION_STATE_S6_PRE_PUSH_REVERSE) &&
       (mission_snapshot.state != MISSION_STATE_S6_FINAL_PUSH) &&
       (mission_snapshot.state != MISSION_STATE_S6_FINAL_REVERSE) &&
-      (mission_snapshot.state != MISSION_STATE_S6_EXIT_TURN_180))
+      (mission_snapshot.state != MISSION_STATE_S6_EXIT_TURN_180) &&
+      (mission_snapshot.state != MISSION_STATE_S7_SEARCH_RED) &&
+      (mission_snapshot.state != MISSION_STATE_S7_WAIT_SECOND_E3) &&
+      (mission_snapshot.state != MISSION_STATE_S7_SEARCH_BLACK) &&
+      (mission_snapshot.state != MISSION_STATE_S7_SILENT_TURN_LEFT) &&
+      (mission_snapshot.state != MISSION_STATE_S7_SILENT_TURN_BACK))
   {
     return;
   }
@@ -4032,6 +4843,127 @@ bool MissionTask_GetSnapshot(MissionSnapshot *snapshot)
   return true;
 }
 
+static void MissionTask_DebugAngles(uint32_t now, bool force)
+{
+  int32_t raw_current;
+  int32_t raw_zero;
+  int32_t field_current;
+  int32_t raw_goal = mission_snapshot.safe_zone_yaw_target_cdeg;
+  int32_t field_goal;
+  const char *role = "SAFE_REF";
+
+  if (!force && ((int32_t)(now - angle_next_debug_tick) < 0))
+  {
+    return;
+  }
+  if (!force && ((mission_snapshot.state == MISSION_STATE_WAIT_START) ||
+                 (mission_snapshot.state == MISSION_STATE_STOPPED) ||
+                 (mission_snapshot.state == MISSION_STATE_FAULT)))
+  {
+    return;
+  }
+  angle_next_debug_tick = now + ROBOT_ANGLE_DEBUG_PERIOD_MS;
+
+  switch (mission_snapshot.state)
+  {
+    case MISSION_STATE_S1_DEPART:
+    case MISSION_STATE_S2_CROSS_BUMP:
+      raw_goal = mission_snapshot.yaw_target_cdeg;
+      role = "DEPART";
+      break;
+    case MISSION_STATE_S3_SEARCH_TURN_CW:
+    case MISSION_STATE_S3_SEARCH_TURN_CCW:
+      raw_goal = s3_search_yaw_target_cdeg;
+      role = vision_search_forward_active ? "SEARCH_REF" : "SEARCH_TURN";
+      break;
+    case MISSION_STATE_S4_ARRANGE_RECOVERY_TURN_LEFT:
+      raw_goal = s4_arrange_recovery_left_yaw_cdeg;
+      role = "ARRANGE_LEFT";
+      break;
+    case MISSION_STATE_S4_ARRANGE_RECOVERY_TURN_BACK:
+      raw_goal = s4_arrange_recovery_right_yaw_cdeg;
+      role = "ARRANGE_BACK";
+      break;
+    case MISSION_STATE_S4_FINAL_RECOVERY_TURN_270:
+      raw_goal = s4_final_first_yaw_cdeg;
+      role = "24_SIDE1";
+      break;
+    case MISSION_STATE_S4_FINAL_RECOVERY_TURN_90:
+      raw_goal = s4_final_second_yaw_cdeg;
+      role = "24_SIDE2";
+      break;
+    case MISSION_STATE_S6_REPOSITION_TURN_SIDE:
+    case MISSION_STATE_S6_REPOSITION_FORWARD:
+      raw_goal = s6_reposition_side_yaw_cdeg;
+      role = "SIDE";
+      break;
+    case MISSION_STATE_S6_RECOVERY_FORWARD:
+      raw_goal = s6_recovery_base_yaw_cdeg;
+      role = "RECOVER_FWD";
+      break;
+    case MISSION_STATE_S6_RECOVERY_TURN_LEFT:
+      raw_goal = s6_recovery_left_yaw_cdeg;
+      role = "RECOVER_LEFT";
+      break;
+    case MISSION_STATE_S6_RECOVERY_TURN_BACK:
+      raw_goal = s6_recovery_right_yaw_cdeg;
+      role = "RECOVER_BACK";
+      break;
+    case MISSION_STATE_S6_OBSTACLE_TURN_LEFT:
+    case MISSION_STATE_S6_OBSTACLE_FORWARD:
+    case MISSION_STATE_S6_OBSTACLE_REVERSE:
+      raw_goal = s6_obstacle_left_yaw_cdeg;
+      role = "36_SIDE";
+      break;
+    case MISSION_STATE_S6_EXIT_TURN_180:
+      raw_goal = s6_exit_yaw_target_cdeg;
+      role = "EXIT180";
+      break;
+    case MISSION_STATE_S7_SILENT_TURN_LEFT:
+      raw_goal = s7_silent_left_yaw_cdeg;
+      role = "07_LEFT45";
+      break;
+    case MISSION_STATE_S7_SILENT_TURN_BACK:
+      raw_goal = s7_silent_right_yaw_cdeg;
+      role = "07_RIGHT90";
+      break;
+    case MISSION_STATE_S5_ALIGN_FOR_ARRANGE:
+    case MISSION_STATE_S5_REVERSE_FOR_ARRANGE:
+    case MISSION_STATE_S6_SEARCH_SAFE_ZONE:
+    case MISSION_STATE_S6_RECOVERY_RETURN_SAFE:
+    case MISSION_STATE_S6_OBSTACLE_FACE_SAFE:
+    case MISSION_STATE_S6_FINAL_ALIGN:
+    case MISSION_STATE_S6_PRE_PUSH_REVERSE:
+    case MISSION_STATE_S6_FINAL_PUSH:
+    case MISSION_STATE_S6_FINAL_REVERSE:
+      role = "SAFE_HOLD";
+      break;
+    default:
+      /* Vision PID states use safe direction as a reference, not a yaw goal. */
+      break;
+  }
+
+  raw_current = MissionTask_WrapYaw(mission_snapshot.yaw_cdeg);
+  raw_zero = MissionTask_WrapYaw(mission_snapshot.yaw_start_cdeg);
+  field_current = MissionTask_WrapYaw(raw_current - raw_zero);
+  raw_goal = MissionTask_WrapYaw(raw_goal);
+  field_goal = MissionTask_WrapYaw(raw_goal - raw_zero);
+  (void)DebugUart_Logf(
+      "[ANGLE] s=%u raw=%ld.%02ld zero=%ld.%02ld field=%ld.%02ld zone=%u team=%u imu=%u\r\n",
+      (unsigned int)mission_snapshot.state,
+      (long)(raw_current / 100L), (long)(raw_current % 100L),
+      (long)(raw_zero / 100L), (long)(raw_zero % 100L),
+      (long)(field_current / 100L), (long)(field_current % 100L),
+      (unsigned int)mission_snapshot.start_zone,
+      (unsigned int)mission_snapshot.team,
+      mission_snapshot.imu_valid ? 1U : 0U);
+  (void)DebugUart_Logf(
+      "[ANGLE-T] role=%s raw=%ld.%02ld field=%ld.%02ld err_cdeg=%ld\r\n",
+      role, (long)(raw_goal / 100L), (long)(raw_goal % 100L),
+      (long)(field_goal / 100L), (long)(field_goal % 100L),
+      (long)MissionTask_YawError(raw_goal, raw_current));
+}
+
 void StartMissionTask(void *argument)
 {
   uint32_t events;
@@ -4067,9 +4999,16 @@ void StartMissionTask(void *argument)
     now = HAL_GetTick();
     if (osMutexAcquire(mission_snapshot_mutex, osWaitForever) == osOK)
     {
+      /* Only time in the 16 PID state counts; recovery/side moves/36 pause it. */
+      if (mission_snapshot.state == MISSION_STATE_S6_TRACK_SAFE_ZONE)
+      {
+        s6_track_elapsed_ms += (uint32_t)(now - s6_track_accounting_tick);
+      }
+      s6_track_accounting_tick = now;
       MissionTask_UpdateInputs(now);
       MissionTask_ProcessEvents(events, now);
       MissionTask_CheckRunningHealth(now);
+      MissionTask_HandleRedPriorityRequest(now);
       MissionTask_RunS1(now);
       MissionTask_RunS2CrossBump(now);
       MissionTask_RunS3Align(now);
@@ -4083,12 +5022,17 @@ void StartMissionTask(void *argument)
       MissionTask_RunS6SideReposition(now);
       MissionTask_RunS6Recovery(now);
       MissionTask_RunS6TrackSafeZone(now);
+      MissionTask_RunS6TrackTimeoutReverse(now);
+      MissionTask_RunS6ObstacleAvoidance(now);
       MissionTask_RunS6FinalAlign(now);
       MissionTask_RunS6RaiseFrame(now);
       MissionTask_RunS6PrePushReverse(now);
       MissionTask_RunS6FinalPush(now);
       MissionTask_RunS6FinalReverse(now);
       MissionTask_RunS6ExitTurn180(now);
+      MissionTask_RunS7SilentSearch(now);
+      MissionTask_RunS7Decision(now);
+      MissionTask_DebugAngles(now, false);
       (void)osMutexRelease(mission_snapshot_mutex);
     }
   }
