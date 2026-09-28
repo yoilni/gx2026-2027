@@ -8,6 +8,9 @@
 
 static uint8_t frame_pwm_started;
 
+static HAL_StatusTypeDef Actuator_SetFrameAngles(uint16_t left_angle_deg,
+                                                 uint16_t right_angle_deg);
+
 static uint8_t Actuator_TimerIsValid(void)
 {
   return (htim2.Instance == TIM2) &&
@@ -51,10 +54,13 @@ HAL_StatusTypeDef Actuator_Init(void)
     return HAL_ERROR;
   }
 
+#if ROBOT_MG90_SPEED_TEST_ENABLED
+  pulse_us = ROBOT_MG90_TEST_PULSE_US;
+#else
   pulse_us = Actuator_Mg90AngleToPulse(ROBOT_CAMERA_WIDE_ANGLE_DEG);
+#endif
 
-  /* PA5 is TIM2 CH1. Continuous PWM holds the MG90 and camera at the
-     calibrated wide-view position after power-up. */
+  /* PA5 is TIM2 CH1: fixed test pulse in test mode, wide-view otherwise. */
   __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pulse_us);
   if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1) != HAL_OK)
   {
@@ -63,9 +69,14 @@ HAL_StatusTypeDef Actuator_Init(void)
 
   HAL_Delay(ROBOT_CAMERA_POWERUP_SETTLE_MS);
 
+#if ROBOT_MG90_SPEED_TEST_ENABLED
+  /* Frame channels stay off during the camera-servo-only test. */
+  return HAL_OK;
+#else
   /* Raise the collection frame after the camera settles so the chassis can
      cross the speed bump. State 3 lowers it before target tracking. */
   return Actuator_SetFrameRaised();
+#endif
 }
 
 static HAL_StatusTypeDef Actuator_SetFrameAngles(uint16_t left_angle_deg,

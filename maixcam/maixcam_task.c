@@ -177,11 +177,12 @@ static void MaixCam_ProcessByte(uint8_t byte)
           maixcam_object.update_tick = 0U;
         }
         else if (maixcam_frame_buffer[2] ==
-                 MAIXCAM_EVENT_SEARCH_TARGET_LOST)
+                 MAIXCAM_EVENT_SEARCH_TARGET_LOST ||
+                 maixcam_frame_buffer[2] == MAIXCAM_EVENT_CENTER_TARGET_LOST)
         {
           maixcam_has_object = 0U;
           maixcam_object.update_tick = 0U;
-          maixcam_event_code = MAIXCAM_EVENT_SEARCH_TARGET_LOST;
+          maixcam_event_code = maixcam_frame_buffer[2];
           maixcam_has_event = 1U;
         }
         else if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_RED_PRIORITY_REQUEST)

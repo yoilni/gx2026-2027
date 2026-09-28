@@ -1,6 +1,10 @@
 #ifndef ROBOT_CONFIG_H
 #define ROBOT_CONFIG_H
 
+/* Temporary MG90-only test; set to 0 to restore the mission. */
+#define ROBOT_MG90_SPEED_TEST_ENABLED 0U
+#define ROBOT_MG90_TEST_PULSE_US 944U /* 40 degrees: 500 + 40 * 2000 / 180. */
+
 /* UART2 angle snapshots, plus an immediate snapshot on every state entry. */
 #define ROBOT_ANGLE_DEBUG_PERIOD_MS 500U
 #define ROBOT_S7_SILENT_TIMEOUT_MS 2000U
@@ -89,6 +93,10 @@
 #define ROBOT_VISION_SEARCH_FORWARD_RPM          60
 #define ROBOT_VISION_SEARCH_FORWARD_MS         500U
 #define ROBOT_S3_SEARCH_TURN_ANGLE_CDEG       9000L
+#define ROBOT_E3_SEARCH_REVERSE_RPM             80
+#define ROBOT_E3_SEARCH_REVERSE_MS             800U
+#define ROBOT_E3_SEARCH_CCW_CDEG             36000L
+#define ROBOT_E3_SEARCH_SPIN_TIMEOUT_MS       20000U
 #define ROBOT_S3_SEARCH_TURN_TOLERANCE_CDEG    200L
 #define ROBOT_S3_SEARCH_TURN_SLOW_THRESHOLD_CDEG 1000L
 #define ROBOT_S3_SEARCH_TURN_FAST_RPM            25
@@ -123,6 +131,18 @@
 #define ROBOT_S4_TRACK_WHEEL_MAX_RPM               90
 #define ROBOT_S4_TRACK_TIMEOUT_MS                15000U
 #define ROBOT_S4_HANDSHAKE_TIMEOUT_MS             5000U
+#define ROBOT_S4_E4_FORWARD_RPM                     80
+#define ROBOT_S4_E4_FORWARD_MS                     600U
+#define ROBOT_S4_E4_FORWARD_WHEEL_MAX_RPM           100
+#define ROBOT_S4_E4_LEFT_CDEG                     4500L
+#define ROBOT_S4_E4_RIGHT_CDEG                    9000L
+#define ROBOT_S4_POST22_REVERSE_RPM                 70
+#define ROBOT_S4_POST22_REVERSE_MS                 500U
+#define ROBOT_S4_POST22_LEFT_CDEG                 4500L
+#define ROBOT_S4_POST22_RIGHT_CDEG                9000L
+#define ROBOT_S4_REPEAT_PUSH_ADD_MS                200U
+#define ROBOT_S4_REPEAT_REVERSE_SUB_MS             300U
+#define ROBOT_S4_REPEAT_REVERSE_MIN_MS             350U
 #define ROBOT_S4_CENTER_FOLLOW_RPM                   60
 #define ROBOT_S4_CENTER_FOLLOW_TURN_MAX_RPM          20
 #define ROBOT_S4_CENTER_FOLLOW_MS                 1000U
@@ -132,8 +152,12 @@
 #define ROBOT_S4_LEFT_CORNER_INITIAL_MS            300U
 #define ROBOT_S4_CORNER_PUSH_RPM                      70
 /* Fixed wheel differences for the two timed corner pushes. */
-#define ROBOT_S4_RIGHT_CORNER_WHEEL_DIFF_RPM          26
-#define ROBOT_S4_LEFT_CORNER_WHEEL_DIFF_RPM           22
+#define ROBOT_S4_RIGHT_CORNER_WHEEL_DIFF_RPM          20
+#define ROBOT_S4_LEFT_CORNER_WHEEL_DIFF_RPM           20
+#define ROBOT_S4_PUSH_RAMP_MS                       150U
+#define ROBOT_S4_PUSH_DISTANCE_PERCENT              125U
+#define ROBOT_S4_REVERSE_RAMP_MS                    150U
+#define ROBOT_S4_LEFT_SPEED_BLEND_MS                150U
 #define ROBOT_S4_RIGHT_REVERSE_RPM                 100
 #define ROBOT_S4_RIGHT_REVERSE_MS                  560U
 #define ROBOT_S4_LEFT_REVERSE_RPM                  100
@@ -144,8 +168,8 @@
 #define ROBOT_S4_ARRANGE_RECOVERY_RIGHT_CDEG        9000L
 #define ROBOT_S4_FRAME_RAISE_SETTLE_MS            300U
 #define ROBOT_S4_FINAL_MISSING_TIMEOUT_MS         2000U
-#define ROBOT_S4_FINAL_RECOVERY_REVERSE_RPM          50
-#define ROBOT_S4_FINAL_RECOVERY_REVERSE_MS          700U
+#define ROBOT_S4_FINAL_RECOVERY_REVERSE_RPM          70
+#define ROBOT_S4_FINAL_RECOVERY_REVERSE_MS          500U
 /* Search both sides of the mapped safe heading; never use raw fixed yaw. */
 #define ROBOT_S4_FINAL_RECOVERY_FIRST_SAFE_OFFSET_CDEG   9000L
 #define ROBOT_S4_FINAL_RECOVERY_SECOND_SAFE_OFFSET_CDEG (-9000L)
@@ -155,6 +179,8 @@
 #define ROBOT_S4_FINAL_RECOVERY_TURN_TIMEOUT_MS     10000U
 #define ROBOT_S4_FINAL_CENTER_RPM                    60
 #define ROBOT_S4_FINAL_CENTER_MS                    350U
+#define ROBOT_S4_RED_FINAL_CENTER_MS                500U
+#define ROBOT_S4_RED_FRAME_LOWER_DELAY_MS            200U
 #define ROBOT_S4_FRAME_LOWER_SETTLE_MS           1000U
 #define ROBOT_S4_POST_LOWER_REVERSE_RPM              70
 #define ROBOT_S4_POST_LOWER_REVERSE_MS              400U
@@ -162,7 +188,7 @@
 
 /* S5 waits for MaixCam event 06 after sending team-colour command 15/25. */
 #define ROBOT_S5_DEBUG_PERIOD_MS                 500U
-#define ROBOT_S5_ARRANGE_FRAME_RAISE_SETTLE_MS  1000U
+#define ROBOT_S5_ARRANGE_FRAME_RAISE_SETTLE_MS     0U
 #define ROBOT_S5_ARRANGE_REVERSE_RPM               50
 #define ROBOT_S5_ARRANGE_REVERSE_MS               700U
 #define ROBOT_S5_ARRANGE_REVERSE_WHEEL_MAX_RPM      80
@@ -231,7 +257,7 @@
   {4U, ROBOT_TEAM_RED,  1U, 0U,     0L,     0L,     0L, 0U, 1U}, \
   {4U, ROBOT_TEAM_BLUE, 0U, 0U,     0L,     0L,     0L, 1U, 0U}, \
   {4U, ROBOT_TEAM_BLUE, 1U, 0U,     0L,     0L,     0L, 0U, 1U}
-#define ROBOT_S6_REPOSITION_FORWARD_RPM               50
+#define ROBOT_S6_REPOSITION_FORWARD_RPM               70
 #define ROBOT_S6_REPOSITION_FORWARD_MS               700U
 #define ROBOT_S6_REPOSITION_WHEEL_MAX_RPM              80
 #define ROBOT_S6_REPOSITION_X_STABLE_MS               300U
@@ -246,7 +272,7 @@
 #define ROBOT_S6_OBSTACLE_LEFT_ANGLE_CDEG          4500L
 #define ROBOT_S6_OBSTACLE_DRIVE_RPM                 100
 #define ROBOT_S6_OBSTACLE_FORWARD_MS               500U
-#define ROBOT_S6_OBSTACLE_REVERSE_MS               700U
+#define ROBOT_S6_OBSTACLE_RIGHT_ANGLE_CDEG        4500L
 #define ROBOT_S6_FRAME_RAISE_SETTLE_MS             1000U
 #define ROBOT_S6_PRE_PUSH_REVERSE_RPM               80
 #define ROBOT_S6_PRE_PUSH_REVERSE_WHEEL_MAX_RPM     90
@@ -267,8 +293,8 @@
 #define ROBOT_S6_EXIT_TURN_TIMEOUT_MS             9000U
 
 /* Mirrored collection-frame servo endpoints (0..280 degree command scale). */
-#define ROBOT_LEFT_FRAME_DOWN_DEG       222U
-#define ROBOT_LEFT_FRAME_UP_DEG         127U
+#define ROBOT_LEFT_FRAME_DOWN_DEG       225U
+#define ROBOT_LEFT_FRAME_UP_DEG         130U
 #define ROBOT_RIGHT_FRAME_DOWN_DEG      2U
 #define ROBOT_RIGHT_FRAME_UP_DEG        90U
 #define ROBOT_FRAME_SERVO_MAX_ANGLE_DEG 280U

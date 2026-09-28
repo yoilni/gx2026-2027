@@ -5,6 +5,7 @@
 #include "mission_task.h"
 #include "reset_reason.h"
 #include "robot_config.h"
+#include "servo_test_task.h"
 
 #define OLED_TASK_PERIOD_TICKS 200U
 
@@ -94,6 +95,39 @@ static void OLED_TaskShowMission(void)
     case MISSION_STATE_S4_WAIT_FINAL_READY:
       text = "S4:WAIT CAM 24  ";
       break;
+    case MISSION_STATE_S4_POST22_REVERSE:
+      text = "22E2:REVERSE   ";
+      break;
+    case MISSION_STATE_S4_POST22_TURN_LEFT:
+      text = "22E2:LEFT45    ";
+      break;
+    case MISSION_STATE_S4_POST22_TURN_RIGHT:
+      text = "22E2:RIGHT90   ";
+      break;
+    case MISSION_STATE_S4_E4_PUSH_RIGHT:
+      text = "E4:PUSH RIGHT  ";
+      break;
+    case MISSION_STATE_S4_E4_REVERSE_RIGHT:
+      text = "E4:BACK RIGHT  ";
+      break;
+    case MISSION_STATE_S4_E4_PUSH_LEFT:
+      text = "E4:PUSH LEFT   ";
+      break;
+    case MISSION_STATE_S4_E4_REVERSE_LEFT:
+      text = "E4:BACK LEFT   ";
+      break;
+    case MISSION_STATE_S4_E4_FORWARD:
+      text = "E4:FORWARD     ";
+      break;
+    case MISSION_STATE_S4_E4_TURN_AWAY:
+      text = "E4:AWAY SAFE   ";
+      break;
+    case MISSION_STATE_S4_E4_TURN_LEFT:
+      text = "E4:LEFT45      ";
+      break;
+    case MISSION_STATE_S4_E4_TURN_RIGHT:
+      text = "E4:RIGHT90     ";
+      break;
     case MISSION_STATE_S4_RAISE_FRAME:
       text = "S4:FRAME UP     ";
       break;
@@ -142,6 +176,9 @@ static void OLED_TaskShowMission(void)
     case MISSION_STATE_S6_REPOSITION_FACE_SAFE:
       text = "S6:FACE SAFE    ";
       break;
+    case MISSION_STATE_S6_REPOSITION_TURN_SAFE:
+      text = "S6:SIDE TO SAFE ";
+      break;
     case MISSION_STATE_S6_RECOVERY_FORWARD:
       text = "S6:RECOVERY FWD ";
       break;
@@ -166,8 +203,8 @@ static void OLED_TaskShowMission(void)
     case MISSION_STATE_S6_OBSTACLE_FORWARD:
       text = "S6:AVOID FWD    ";
       break;
-    case MISSION_STATE_S6_OBSTACLE_REVERSE:
-      text = "S6:AVOID REVERSE";
+    case MISSION_STATE_S6_OBSTACLE_TURN_RIGHT:
+      text = "S6:AVOID RIGHT ";
       break;
     case MISSION_STATE_S6_TRACK_TIMEOUT_REVERSE:
       text = "S6:8S REVERSE   ";
@@ -305,6 +342,23 @@ static void OLED_TaskShowResetReason(void)
 static void OLED_TaskUpdate(void)
 {
   if (oled_ready == 0U) return;
+
+  if (ROBOT_MG90_SPEED_TEST_ENABLED != 0U)
+  {
+    uint16_t pulse_us = ServoTest_GetPulseUs();
+    (void)OLED_WriteString(0U, 0U,
+        HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_12) == GPIO_PIN_SET
+            ? "PE12:H UNUSED   " : "PE12:L UNUSED   ");
+    (void)OLED_WriteString(0U, 2U, "MG90:40 HOLD    ");
+    (void)OLED_WriteString(0U, 4U,
+        pulse_us == 944U ? "PWM:944us 40    " :
+        pulse_us == 2500U ? "PWM:2500us 180  " :
+        pulse_us == 500U ? "PWM:500us ZERO  " :
+        pulse_us == 1400U ? "PWM:1400us A    " :
+        pulse_us == 1600U ? "PWM:1600us B    " : "PWM:1500us MID  ");
+    OLED_TaskShowResetReason();
+    return;
+  }
 
   OLED_TaskShowStartButton();
   OLED_TaskShowMission();

@@ -32,6 +32,8 @@
 #include "mission_task.h"
 #include "debug_uart_task.h"
 #include "start_button_task.h"
+#include "robot_config.h"
+#include "servo_test_task.h"
 
 /* USER CODE END Includes */
 
@@ -52,14 +54,18 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
+#if !ROBOT_MG90_SPEED_TEST_ENABLED
 static osThreadId_t motorTaskHandle;
+#endif
 static osThreadId_t oledTaskHandle;
 
+#if !ROBOT_MG90_SPEED_TEST_ENABLED
 static const osThreadAttr_t motorTask_attributes = {
   .name = "motorTask",
   .stack_size = 256U * 4U,
   .priority = (osPriority_t)osPriorityHigh,
 };
+#endif
 
 static const osThreadAttr_t oledTask_attributes = {
   .name = "oledTask",
@@ -116,11 +122,20 @@ void MX_FREERTOS_Init(void) {
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
+#if !ROBOT_MG90_SPEED_TEST_ENABLED
   motorTaskHandle = osThreadNew(StartMotorTask, NULL, &motorTask_attributes);
+#endif
   oledTaskHandle = osThreadNew(StartOledTask, NULL, &oledTask_attributes);
-  if ((defaultTaskHandle == NULL) || (motorTaskHandle == NULL) ||
-      (oledTaskHandle == NULL) || !DebugUartTask_Create(&huart2) ||
-      !MissionTask_Create() || !StartButtonTask_Create())
+  if ((defaultTaskHandle == NULL) || (oledTaskHandle == NULL) ||
+      !DebugUartTask_Create(&huart2))
+  {
+    Error_Handler();
+  }
+#if ROBOT_MG90_SPEED_TEST_ENABLED
+  if (!ServoTestTask_Create())
+#else
+  if ((motorTaskHandle == NULL) || !MissionTask_Create() || !StartButtonTask_Create())
+#endif
   {
     Error_Handler();
   }

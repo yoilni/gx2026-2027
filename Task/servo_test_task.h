@@ -2,9 +2,11 @@
 #define SERVO_TEST_TASK_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
-/* PE12 high holds the 180-degree MG90 at 90 degrees on PA5/TIM2 CH1. */
+/* Hold the configured position-test pulse on PA5; PE12 is unused. */
 bool ServoTestTask_Create(void);
 void StartServoTestTask(void *argument);
+uint16_t ServoTest_GetPulseUs(void);
 
 #endif /* SERVO_TEST_TASK_H */
