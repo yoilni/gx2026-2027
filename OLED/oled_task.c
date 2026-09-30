@@ -3,6 +3,7 @@
 #include "cmsis_os.h"
 #include "main.h"
 #include "mission_task.h"
+#include "motor_test_task.h"
 #include "reset_reason.h"
 #include "robot_config.h"
 #include "servo_test_task.h"
@@ -72,7 +73,7 @@ static void OLED_TaskShowMission(void)
       text = "S4:TRACK CENTER ";
       break;
     case MISSION_STATE_S4_CENTER_FOLLOW_THROUGH:
-      text = "S4:X FWD 1 SEC ";
+      text = "S4:ACK14        ";
       break;
     case MISSION_STATE_S4_WAIT_ARRANGE_READY:
       text = "S4:WAIT CAM 02  ";
@@ -128,6 +129,9 @@ static void OLED_TaskShowMission(void)
     case MISSION_STATE_S4_E4_TURN_RIGHT:
       text = "E4:RIGHT90     ";
       break;
+    case MISSION_STATE_S4_E4_RED_SPIN_360:
+      text = "E4:RED CCW360  ";
+      break;
     case MISSION_STATE_S4_RAISE_FRAME:
       text = "S4:FRAME UP     ";
       break;
@@ -179,8 +183,8 @@ static void OLED_TaskShowMission(void)
     case MISSION_STATE_S6_REPOSITION_TURN_SAFE:
       text = "S6:SIDE TO SAFE ";
       break;
-    case MISSION_STATE_S6_RECOVERY_FORWARD:
-      text = "S6:RECOVERY FWD ";
+    case MISSION_STATE_S6_RECOVERY_START:
+      text = "S6:RECOVER START";
       break;
     case MISSION_STATE_S6_RECOVERY_TURN_LEFT:
       text = "S6:RECOVERY LEFT";
@@ -356,6 +360,33 @@ static void OLED_TaskUpdate(void)
         pulse_us == 500U ? "PWM:500us ZERO  " :
         pulse_us == 1400U ? "PWM:1400us A    " :
         pulse_us == 1600U ? "PWM:1600us B    " : "PWM:1500us MID  ");
+    OLED_TaskShowResetReason();
+    return;
+  }
+
+  if (ROBOT_FRAME_DOWN_TEST_ENABLED != 0U)
+  {
+    (void)OLED_WriteString(0U, 0U, "FRAME:DOWN TEST ");
+    (void)OLED_WriteString(0U, 2U, "MOTORS:OFF      ");
+    (void)OLED_WriteString(0U, 4U, "CAM:45D PE12:-- ");
+    OLED_TaskShowResetReason();
+    return;
+  }
+
+  if (ROBOT_STRAIGHT_TEST_ENABLED != 0U)
+  {
+    const char *status = "WAIT CAN FEEDBK ";
+    switch (MotorTest_GetStatus())
+    {
+      case MOTOR_TEST_RUNNING:        status = "FORWARD 1S      "; break;
+      case MOTOR_TEST_DONE:           status = "STOPPED         "; break;
+      case MOTOR_TEST_FEEDBACK_FAULT: status = "FAULT:CAN LOST  "; break;
+      case MOTOR_TEST_WAIT_FEEDBACK:
+      default:                        break;
+    }
+    (void)OLED_WriteString(0U, 0U, "MOTOR TEST100RPM");
+    (void)OLED_WriteString(0U, 2U, status);
+    (void)OLED_WriteString(0U, 4U, "PE12:UNUSED     ");
     OLED_TaskShowResetReason();
     return;
   }

@@ -26,6 +26,8 @@ static volatile uint8_t maixcam_has_object;
 static volatile uint8_t maixcam_event_code;
 static volatile uint8_t maixcam_has_event;
 static volatile uint8_t maixcam_red_priority_pending;
+static volatile uint8_t maixcam_safe_align_pending;
+static volatile uint8_t maixcam_recovery_loss_filter;
 
 static void MaixCam_ResetParser(uint8_t byte)
 {
@@ -173,15 +175,21 @@ static void MaixCam_ProcessByte(uint8_t byte)
       {
         if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_NO_TARGET)
         {
-          maixcam_has_object = 0U;
-          maixcam_object.update_tick = 0U;
+          if (maixcam_recovery_loss_filter != MAIXCAM_EVENT_NO_TARGET)
+          {
+            maixcam_has_object = 0U;
+          }
+          maixcam_event_code = MAIXCAM_EVENT_NO_TARGET;
+          maixcam_has_event = 1U;
         }
         else if (maixcam_frame_buffer[2] ==
                  MAIXCAM_EVENT_SEARCH_TARGET_LOST ||
                  maixcam_frame_buffer[2] == MAIXCAM_EVENT_CENTER_TARGET_LOST)
         {
-          maixcam_has_object = 0U;
-          maixcam_object.update_tick = 0U;
+          if (maixcam_recovery_loss_filter != maixcam_frame_buffer[2])
+          {
+            maixcam_has_object = 0U;
+          }
           maixcam_event_code = maixcam_frame_buffer[2];
           maixcam_has_event = 1U;
         }
@@ -208,10 +216,11 @@ static void MaixCam_ProcessByte(uint8_t byte)
           maixcam_event_code = MAIXCAM_EVENT_SAFE_ZONE_FOUND;
           maixcam_has_event = 1U;
         }
-        else if ((maixcam_frame_buffer[2] ==
-                  MAIXCAM_EVENT_SAFE_ZONE_ALIGN_READY) ||
-                 (maixcam_frame_buffer[2] ==
-                  MAIXCAM_EVENT_SAFE_ZONE_OBSTACLE))
+        else if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_SAFE_ZONE_ALIGN_READY)
+        {
+          maixcam_safe_align_pending = 1U;
+        }
+        else if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_SAFE_ZONE_OBSTACLE)
         {
           maixcam_event_code = maixcam_frame_buffer[2];
           maixcam_has_event = 1U;
@@ -255,6 +264,8 @@ HAL_StatusTypeDef MaixCam_Init(UART_HandleTypeDef *huart)
   maixcam_has_event = 0U;
   maixcam_object.sequence = 0U;
   maixcam_red_priority_pending = 0U;
+  maixcam_safe_align_pending = 0U;
+  maixcam_recovery_loss_filter = 0U;
   maixcam_object.update_tick = 0U;
   return HAL_UART_Receive_IT(maixcam_uart, &maixcam_rx_byte, 1U);
 }
@@ -283,7 +294,7 @@ void MaixCam_ClearObject(void)
 
   __disable_irq();
   maixcam_has_object = 0U;
-  maixcam_object.update_tick = 0U;
+  /* Retain the last receipt time for diagnostics; presence controls validity. */
   if (primask == 0U)
   {
     __enable_irq();
@@ -298,6 +309,7 @@ void MaixCam_ClearEvent(void)
   maixcam_event_code = 0U;
   maixcam_has_event = 0U;
   maixcam_red_priority_pending = 0U;
+  /* 26 has an independent lifecycle; clearing maneuver events must not lose it. */
   if (primask == 0U)
   {
     __enable_irq();
@@ -327,7 +339,14 @@ void MaixCam_UART_ErrorCallback(UART_HandleTypeDef *huart)
 
 bool MaixCam_GetObject(MaixCam_Object *object)
 {
+  return MaixCam_GetObjectSnapshot(object) &&
+      ((uint32_t)(HAL_GetTick() - object->update_tick) <= MAIXCAM_DATA_TIMEOUT_MS);
+}
+
+bool MaixCam_GetObjectSnapshot(MaixCam_Object *object)
+{
   uint32_t primask;
+  bool present;
 
   if (object == NULL)
   {
@@ -336,15 +355,38 @@ bool MaixCam_GetObject(MaixCam_Object *object)
 
   primask = __get_PRIMASK();
   __disable_irq();
-  if (maixcam_has_object == 0U)
-  {
-    if (primask == 0U) __enable_irq();
-    return false;
-  }
+  present = maixcam_has_object != 0U;
   *object = maixcam_object;
   if (primask == 0U) __enable_irq();
 
-  return ((uint32_t)(HAL_GetTick() - object->update_tick) <= MAIXCAM_DATA_TIMEOUT_MS);
+  return present;
+}
+
+void MaixCam_SetRecoveryLossFilter(uint8_t event_code)
+{
+  maixcam_recovery_loss_filter = event_code;
+}
+
+bool MaixCam_DropEventIf(uint8_t event_code)
+{
+  uint32_t primask = __get_PRIMASK();
+  bool dropped;
+  __disable_irq();
+  dropped = maixcam_has_event != 0U && maixcam_event_code == event_code;
+  if (dropped) maixcam_has_event = 0U;
+  if (primask == 0U) __enable_irq();
+  return dropped;
+}
+
+bool MaixCam_TakeSafeZoneAlignRequest(void)
+{
+  uint32_t primask = __get_PRIMASK();
+  bool pending;
+  __disable_irq();
+  pending = maixcam_safe_align_pending != 0U;
+  maixcam_safe_align_pending = 0U;
+  if (primask == 0U) __enable_irq();
+  return pending;
 }
 
 bool MaixCam_TakeRedPriorityRequest(void)

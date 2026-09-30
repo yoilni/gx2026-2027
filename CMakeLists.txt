@@ -49,6 +49,8 @@ add_executable(${CMAKE_PROJECT_NAME}
         Task/reset_reason.h
         Task/servo_test_task.c
         Task/servo_test_task.h
+        Task/motor_test_task.c
+        Task/motor_test_task.h
         Task/robot_config.h
         Task/uart_callback_router.c)
 

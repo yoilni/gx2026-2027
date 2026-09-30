@@ -56,11 +56,13 @@ HAL_StatusTypeDef Actuator_Init(void)
 
 #if ROBOT_MG90_SPEED_TEST_ENABLED
   pulse_us = ROBOT_MG90_TEST_PULSE_US;
+#elif ROBOT_FRAME_DOWN_TEST_ENABLED
+  pulse_us = Actuator_Mg90AngleToPulse(ROBOT_FRAME_TEST_CAMERA_ANGLE_DEG);
 #else
   pulse_us = Actuator_Mg90AngleToPulse(ROBOT_CAMERA_WIDE_ANGLE_DEG);
 #endif
 
-  /* PA5 is TIM2 CH1: fixed test pulse in test mode, wide-view otherwise. */
+  /* PA5 is TIM2 CH1: test angle in frame test, wide view in mission mode. */
   __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pulse_us);
   if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1) != HAL_OK)
   {
@@ -72,6 +74,9 @@ HAL_StatusTypeDef Actuator_Init(void)
 #if ROBOT_MG90_SPEED_TEST_ENABLED
   /* Frame channels stay off during the camera-servo-only test. */
   return HAL_OK;
+#elif ROBOT_FRAME_DOWN_TEST_ENABLED
+  /* In the frame test, hold the camera test angle and lower both servos. */
+  return Actuator_SetFrameLowered();
 #else
   /* Raise the collection frame after the camera settles so the chassis can
      cross the speed bump. State 3 lowers it before target tracking. */

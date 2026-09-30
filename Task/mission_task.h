@@ -10,7 +10,7 @@ typedef enum
   MISSION_STATE_WAIT_START,
   MISSION_STATE_S1_DEPART,
   MISSION_STATE_S2_CROSS_BUMP,
-  MISSION_STATE_S3_ALIGN_GREEN,
+  MISSION_STATE_S3_ALIGN_GREEN, /* Reserved: keep numeric state IDs stable. */
   MISSION_STATE_S3_SEARCH_TURN_CW,
   MISSION_STATE_S3_SEARCH_TURN_CCW,
   MISSION_STATE_S3_TRACK_GREEN,
@@ -54,7 +54,7 @@ typedef enum
   MISSION_STATE_S6_REPOSITION_TURN_SIDE,
   MISSION_STATE_S6_REPOSITION_FORWARD,
   MISSION_STATE_S6_REPOSITION_FACE_SAFE,
-  MISSION_STATE_S6_RECOVERY_FORWARD,
+  MISSION_STATE_S6_RECOVERY_START,
   MISSION_STATE_S6_RECOVERY_TURN_LEFT,
   MISSION_STATE_S6_RECOVERY_TURN_BACK,
   MISSION_STATE_S6_RECOVERY_RETURN_SAFE,
@@ -78,7 +78,9 @@ typedef enum
   MISSION_STATE_S6_TRACK_TIMEOUT_REVERSE,
   MISSION_STATE_S7_SILENT_TURN_LEFT,
   MISSION_STATE_S7_SILENT_TURN_BACK,
-  MISSION_STATE_S6_REPOSITION_TURN_SAFE
+  MISSION_STATE_S6_REPOSITION_TURN_SAFE,
+  MISSION_STATE_S4_E4_GREEN_SPIN_360,
+  MISSION_STATE_S4_E4_RED_SPIN_360
 } MissionState;
 
 typedef enum
@@ -117,6 +119,7 @@ typedef struct
   bool right_motor_online;
   bool imu_valid;
   bool vision_target_valid;
+  bool target_present;
   bool team_selector_high;
   bool start_pe14_high;
   bool start_pe15_high;
@@ -136,6 +139,7 @@ typedef struct
   int16_t right_target_rpm;
   uint8_t target_id;
   uint32_t target_sequence;
+  uint32_t target_age_ms; /* UINT32_MAX means no coordinate has been received. */
   int16_t vision_x_error_px;
   int16_t vision_y_error_px;
   int16_t vision_turn_rpm;

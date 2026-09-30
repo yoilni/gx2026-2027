@@ -1,6 +1,7 @@
 #include "M2006.h"
 #include "M2006_PID.h"
 #include "M2006_Speed.h"
+#include "robot_config.h"
 #include <stdint.h>
 #include <math.h>
 
@@ -10,6 +11,7 @@
 // 速度环控制器实例
 static SpeedLoopController speed_loop = {0};
 static uint8_t feedback_was_fresh[M2006_MOTOR_COUNT];
+static float ramped_target_speed[M2006_MOTOR_COUNT];
 
 static uint32_t SpeedLoop_EnterCritical(void)
 {
@@ -40,6 +42,29 @@ static void SpeedLoop_ResetPidState(PID_TypeDef *pid)
     pid->dout = 0.0f;
     pid->output = 0.0f;
     pid->last_output = 0.0f;
+}
+
+static float SpeedLoop_SlewTarget(float current, float requested,
+                                  uint32_t elapsed_ms)
+{
+    float step;
+    float goal = requested;
+    float rate = ROBOT_WHEEL_ACCEL_RPM_PER_S;
+
+    /* A commanded reversal must pass through zero instead of flipping the
+       wheel-speed target in a single controller update. */
+    if ((current > 0.0f && requested < 0.0f) ||
+        (current < 0.0f && requested > 0.0f)) {
+        goal = 0.0f;
+        rate = ROBOT_WHEEL_DECEL_RPM_PER_S;
+    } else if (fabsf(requested) < fabsf(current)) {
+        rate = ROBOT_WHEEL_DECEL_RPM_PER_S;
+    }
+
+    step = rate * 36.0f * (float)elapsed_ms / 1000.0f;
+    if (goal > current + step) return current + step;
+    if (goal < current - step) return current - step;
+    return goal;
 }
 
 
@@ -97,6 +122,7 @@ void SpeedLoop_Init(void)
 	
 	    for(uint8_t i = 0U; i < M2006_MOTOR_COUNT; i++) {
         speed_loop.target_speed[i] = 0;
+        ramped_target_speed[i] = 0.0f;
         feedback_was_fresh[i] = 0U;
     }
 			
@@ -117,14 +143,15 @@ void SpeedLoop_SetTarget(float speed_left, float speed_right, int16_t current_li
     float left_target = speed_left * 36.0f;
     float right_target = speed_right * 36.0f;
 
-    speed_loop.target_speed[M2006_LEFT_FRONT_INDEX] = left_target;
-    speed_loop.target_speed[M2006_LEFT_REAR_INDEX] = left_target;
-    speed_loop.target_speed[M2006_RIGHT_FRONT_INDEX] = right_target;
-    speed_loop.target_speed[M2006_RIGHT_REAR_INDEX] = right_target;
-
     for (uint8_t i = 0U; i < M2006_MOTOR_COUNT; i++) {
+        float target = (i == M2006_LEFT_FRONT_INDEX ||
+                        i == M2006_LEFT_REAR_INDEX) ? left_target : right_target;
+        if (speed_loop.target_speed[i] != target ||
+            motor_pid[i].MaxOutput != normalized_limit) {
+            SpeedLoop_ResetPidState(&motor_pid[i]);
+        }
+        speed_loop.target_speed[i] = target;
         motor_pid[i].MaxOutput = normalized_limit;
-        SpeedLoop_ResetPidState(&motor_pid[i]);
     }
 
     SpeedLoop_ExitCritical(primask);
@@ -141,9 +168,14 @@ void SpeedLoop_SetMotorTarget(uint8_t motor_id, float speed, int16_t c_limit)
 
     uint8_t index = motor_id - 1U;
     primask = SpeedLoop_EnterCritical();
-    speed_loop.target_speed[index] = speed * 36.0f;
-    motor_pid[index].MaxOutput = SpeedLoop_NormalizeCurrentLimit(c_limit);
-    SpeedLoop_ResetPidState(&motor_pid[index]);
+    float target = speed * 36.0f;
+    float normalized_limit = SpeedLoop_NormalizeCurrentLimit(c_limit);
+    if (speed_loop.target_speed[index] != target ||
+        motor_pid[index].MaxOutput != normalized_limit) {
+        SpeedLoop_ResetPidState(&motor_pid[index]);
+    }
+    speed_loop.target_speed[index] = target;
+    motor_pid[index].MaxOutput = normalized_limit;
     SpeedLoop_ExitCritical(primask);
 }
 
@@ -151,12 +183,28 @@ void brake(void)
 {
 	SpeedLoop_SetTarget(0.0f, 0.0f, stop_current_limit);
 }
+
+void SpeedLoop_EmergencyStop(void)
+{
+    uint32_t primask = SpeedLoop_EnterCritical();
+    for (uint8_t i = 0U; i < M2006_MOTOR_COUNT; i++) {
+        speed_loop.target_speed[i] = 0.0f;
+        ramped_target_speed[i] = 0.0f;
+        motor_pid[i].MaxOutput = (float)stop_current_limit;
+        SpeedLoop_ResetPidState(&motor_pid[i]);
+    }
+    SpeedLoop_ExitCritical(primask);
+}
 // 更新速度环控制(100Hz)
 void SpeedLoop_Update(CAN_HandleTypeDef *hcan)
 {
     int16_t current_command[M2006_MOTOR_COUNT] = {0};
     uint32_t now = GetTick();
+    uint32_t elapsed_ms = now - speed_loop.last_update;
     uint8_t feedback_just_timed_out = 0U;
+
+    /* Avoid one large jump if the task was delayed; normal cadence is 2 ms. */
+    if (elapsed_ms > 20U) elapsed_ms = 20U;
 
     for (uint8_t i = 0U; i < M2006_MOTOR_COUNT; i++) {
         uint8_t feedback_is_fresh =
@@ -164,16 +212,26 @@ void SpeedLoop_Update(CAN_HandleTypeDef *hcan)
             ((uint32_t)(now - moto_chassis[i].last_rx_tick) <= M2006_FEEDBACK_TIMEOUT_MS);
 
         if (feedback_is_fresh == 0U) {
-            if (feedback_was_fresh[i] != 0U) feedback_just_timed_out = 1U;
+            if (feedback_was_fresh[i] != 0U) {
+                feedback_just_timed_out = 1U;
+            }
             feedback_was_fresh[i] = 0U;
             speed_loop.current_speed[i] = 0.0f;
+            ramped_target_speed[i] = 0.0f;
             SpeedLoop_ResetPidState(&motor_pid[i]);
             continue;
         }
 
         feedback_was_fresh[i] = 1U;
         speed_loop.current_speed[i] = moto_chassis[i].speed_rpm;
-        motor_pid[i].target = speed_loop.target_speed[i];
+        ramped_target_speed[i] = SpeedLoop_SlewTarget(
+            ramped_target_speed[i], speed_loop.target_speed[i], elapsed_ms);
+        motor_pid[i].target = ramped_target_speed[i];
+        if (fabsf(ramped_target_speed[i]) < 0.5f &&
+            fabsf(speed_loop.current_speed[i]) < motor_pid[i].DeadBand) {
+            SpeedLoop_ResetPidState(&motor_pid[i]);
+            continue;
+        }
         motor_pid[i].f_cal_pid(&motor_pid[i], speed_loop.current_speed[i]);
         if (fabsf(motor_pid[i].output) < 200.0f) motor_pid[i].output = 0.0f;
         current_command[i] = (int16_t)motor_pid[i].output;

@@ -80,6 +80,13 @@ void MaixCam_ClearEvent(void);
 void MaixCam_UART_RxCpltCallback(UART_HandleTypeDef *huart);
 void MaixCam_UART_ErrorCallback(UART_HandleTypeDef *huart);
 bool MaixCam_GetObject(MaixCam_Object *object);
+/* Copies last receipt even when invalidated; true means present, not fresh. */
+bool MaixCam_GetObjectSnapshot(MaixCam_Object *object);
+/* Ignore duplicate loss invalidation while the matching recovery is active. */
+void MaixCam_SetRecoveryLossFilter(uint8_t event_code);
+bool MaixCam_DropEventIf(uint8_t event_code);
+/* Separate one-shot latch: 26 must survive other events during side moves. */
+bool MaixCam_TakeSafeZoneAlignRequest(void);
 /* Atomically reads and clears one pending 5-byte event frame. */
 bool MaixCam_TakeEvent(uint8_t *event_code);
 /* Separate latch so a subsequent E3/04 cannot overwrite the red-priority request. */

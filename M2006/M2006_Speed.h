@@ -27,6 +27,7 @@ void SpeedLoop_Init(void);
 void SpeedLoop_SetMotorTarget(uint8_t motor_id, float speed, int16_t c_limit);
 void SpeedLoop_SetTarget(float speed_left, float speed_right, int16_t current_limit);
 void brake(void);
+void SpeedLoop_EmergencyStop(void);
 void SpeedLoop_Update(CAN_HandleTypeDef *hcan);
 void MotorPID_Init(uint8_t Motor_Number);
 
