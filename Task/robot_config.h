@@ -270,40 +270,55 @@
 #define ROBOT_S6_YAW_MAX_TURN_RPM                 30.0f
 
 /* After event 16, use image XY error to approach the safe-zone point until
-   MaixCam reports event 26 (safe-zone area >= 50%). Then turn to the field-
-   mapped safe-zone normal heading and perform a short yaw-held final push. */
-/* Every acquisition must visually align before making a yaw/side decision.
+   MaixCam reports event 26 (safe-zone area >= 50%). Turn to the field-mapped
+   safe-zone heading, then recheck fresh X/yaw before the short final push. */
+/* Both supply and casualty approaches require fresh X alignment before Y motion.
    Count distinct consecutive coordinate frames, not repeated task ticks. */
 #define ROBOT_S6_X_ALIGN_MIN_FRAMES                   3U
 #define ROBOT_S6_X_ALIGN_STABLE_MS                  300U
 #define ROBOT_S6_X_ALIGN_MAX_GAP_MS                 500U
+/* S6 approach keeps Y motion stopped until the safe-zone X error is stable
+   within this range; supplies may start side reposition before X alignment. */
+#define ROBOT_S6_SIDE_X_TOLERANCE_PX                 30
+/* At the final heading, verify X again after turning and after pre-reverse. */
+#define ROBOT_S6_FINAL_VERIFY_TIMEOUT_MS          4000U
+#define ROBOT_S6_FINAL_SIDE_MAX_ATTEMPTS             3U
+#define ROBOT_S6_FINAL_SIDE_FORWARD_MS             250U
 #define ROBOT_S6_REPOSITION_MIN_OFFSET_CDEG         2000L
 #define ROBOT_S6_REPOSITION_SECTOR_CDEG            9000L
-/* Side-reposition calibration entry points, one row per zone/team/target kind.
+/* Side-reposition calibration entry points; a target may have multiple sectors.
    Fields: zone, team, kind (0=supply, 1=casualty), enabled,
    sector start, sector end, side heading, include start, include end.
    Angles are centidegrees relative to the yaw latched at PE12 start (not the
    45-degree departure heading). Left turns increase yaw; right turns decrease
    yaw. A clockwise-positive angle A maps to (360 - A) modulo 360 here.
    Sectors may cross 0 degrees.
-   Disabled/unconfirmed rows retain the existing safe-heading-relative rule.
-   Only zone 3 / blue is currently specified. Enable other rows after calibration. */
+   Disabled casualty rows retain the existing safe-heading-relative rule.
+   Material rows outside zone 3 / blue are geometry-derived and need field checks. */
 #define ROBOT_S6_SIDE_RULE_ROWS \
-  {1U, ROBOT_TEAM_RED,  0U, 0U,     0L,     0L,     0L, 1U, 0U}, \
+  {1U, ROBOT_TEAM_RED,  0U, 1U,  9000L, 16000L,  9000L, 1U, 1U}, \
+  {1U, ROBOT_TEAM_RED,  0U, 1U, 19000L, 27000L, 27000L, 0U, 1U}, \
   {1U, ROBOT_TEAM_RED,  1U, 0U,     0L,     0L,     0L, 0U, 1U}, \
-  {1U, ROBOT_TEAM_BLUE, 0U, 0U,     0L,     0L,     0L, 1U, 0U}, \
+  {1U, ROBOT_TEAM_BLUE, 0U, 1U,  1000L,  9000L,  9000L, 0U, 1U}, \
+  {1U, ROBOT_TEAM_BLUE, 0U, 1U, 27000L, 34000L, 27000L, 1U, 1U}, \
   {1U, ROBOT_TEAM_BLUE, 1U, 0U,     0L,     0L,     0L, 0U, 1U}, \
-  {2U, ROBOT_TEAM_RED,  0U, 0U,     0L,     0L,     0L, 1U, 0U}, \
+  {2U, ROBOT_TEAM_RED,  0U, 1U,  9000L, 16000L,  9000L, 1U, 1U}, \
+  {2U, ROBOT_TEAM_RED,  0U, 1U, 19000L, 27000L, 27000L, 0U, 1U}, \
   {2U, ROBOT_TEAM_RED,  1U, 0U,     0L,     0L,     0L, 0U, 1U}, \
-  {2U, ROBOT_TEAM_BLUE, 0U, 0U,     0L,     0L,     0L, 1U, 0U}, \
+  {2U, ROBOT_TEAM_BLUE, 0U, 1U,  1000L,  9000L,  9000L, 0U, 1U}, \
+  {2U, ROBOT_TEAM_BLUE, 0U, 1U, 27000L, 34000L, 27000L, 1U, 1U}, \
   {2U, ROBOT_TEAM_BLUE, 1U, 0U,     0L,     0L,     0L, 0U, 1U}, \
-  {3U, ROBOT_TEAM_RED,  0U, 0U,     0L,     0L,     0L, 1U, 0U}, \
+  {3U, ROBOT_TEAM_RED,  0U, 1U,  1000L,  9000L,  9000L, 0U, 1U}, \
+  {3U, ROBOT_TEAM_RED,  0U, 1U, 27000L, 34000L, 27000L, 1U, 1U}, \
   {3U, ROBOT_TEAM_RED,  1U, 0U,     0L,     0L,     0L, 0U, 1U}, \
-  {3U, ROBOT_TEAM_BLUE, 0U, 1U, 18000L, 27000L, 27000L, 0U, 1U}, \
+  {3U, ROBOT_TEAM_BLUE, 0U, 1U,  9000L, 16000L,  9000L, 1U, 1U}, \
+  {3U, ROBOT_TEAM_BLUE, 0U, 1U, 19000L, 27000L, 27000L, 0U, 1U}, \
   {3U, ROBOT_TEAM_BLUE, 1U, 1U,  9000L, 18000L,  9000L, 1U, 0U}, \
-  {4U, ROBOT_TEAM_RED,  0U, 0U,     0L,     0L,     0L, 1U, 0U}, \
+  {4U, ROBOT_TEAM_RED,  0U, 1U,  1000L,  9000L,  9000L, 0U, 1U}, \
+  {4U, ROBOT_TEAM_RED,  0U, 1U, 27000L, 34000L, 27000L, 1U, 1U}, \
   {4U, ROBOT_TEAM_RED,  1U, 0U,     0L,     0L,     0L, 0U, 1U}, \
-  {4U, ROBOT_TEAM_BLUE, 0U, 0U,     0L,     0L,     0L, 1U, 0U}, \
+  {4U, ROBOT_TEAM_BLUE, 0U, 1U,  9000L, 16000L,  9000L, 1U, 1U}, \
+  {4U, ROBOT_TEAM_BLUE, 0U, 1U, 19000L, 27000L, 27000L, 0U, 1U}, \
   {4U, ROBOT_TEAM_BLUE, 1U, 0U,     0L,     0L,     0L, 0U, 1U}
 #define ROBOT_S6_REPOSITION_FORWARD_RPM               70
 #define ROBOT_S6_REPOSITION_FORWARD_MS               700U
@@ -340,9 +355,9 @@
 #define ROBOT_S6_EXIT_TURN_TIMEOUT_MS             9000U
 
 /* Mirrored collection-frame servo endpoints (0..280 degree command scale). */
-#define ROBOT_LEFT_FRAME_DOWN_DEG       225U
+#define ROBOT_LEFT_FRAME_DOWN_DEG       215U
 #define ROBOT_LEFT_FRAME_UP_DEG         140U
-#define ROBOT_RIGHT_FRAME_DOWN_DEG      2U
+#define ROBOT_RIGHT_FRAME_DOWN_DEG      15U
 #define ROBOT_RIGHT_FRAME_UP_DEG        80U
 #define ROBOT_FRAME_SERVO_MAX_ANGLE_DEG 280U
 #define ROBOT_FRAME_SERVO_MIN_PULSE_US  500U

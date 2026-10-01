@@ -108,6 +108,7 @@ static int32_t s4_e4_away_yaw_cdeg;
 static int32_t s4_e4_right_yaw_cdeg;
 static int32_t s4_post22_left_yaw_cdeg;
 static int32_t s4_post22_right_yaw_cdeg;
+static bool s4_post22_search_active;
 static uint16_t s4_arrange_cycle_count;
 static uint32_t s4_center_target_lost_since;
 static bool s4_center_search_sweep_completed;
@@ -147,9 +148,25 @@ static uint32_t s6_x_align_first_tick;
 static uint32_t s6_x_align_last_tick;
 static uint8_t s6_x_align_id;
 static uint8_t s6_x_align_frames;
+static uint32_t s6_side_x_align_first_tick;
+static uint8_t s6_side_x_align_frames;
 static bool s6_x_align_has_sequence;
+static bool s6_final_pre_reverse_done;
+static bool s6_final_side_correction_active;
+static uint8_t s6_final_side_attempts;
+static uint8_t s6_final_off_center_frames;
+static int8_t s6_final_off_center_sign;
+static uint8_t s6_final_off_center_id;
+static uint32_t s6_final_off_center_first_tick;
+static uint32_t s6_final_off_center_last_tick;
+static uint32_t s6_final_off_center_last_sequence;
 static bool s6_pre_reposition_decision_pending;
 static bool s6_align26_pending;
+static bool s6_supply_y_started;
+static bool s6_obstacle_side_required;
+static bool s6_obstacle_side_decision_pending;
+static bool s6_obstacle_side_decision_done;
+static int32_t s6_obstacle_decision_yaw_cdeg;
 static uint8_t s6_reposition_count;
 static uint8_t s6_recovery_count;
 static bool s6_recovery_from_tracking;
@@ -526,7 +543,13 @@ static void MissionTask_EnterState(MissionState state, uint32_t now)
       (state == MISSION_STATE_WAIT_START))
   {
     s6_align26_pending = false;
+    s6_final_pre_reverse_done = false;
+    s6_final_side_correction_active = false;
+    s6_final_side_attempts = 0U;
     s6_pre_reposition_decision_pending = false;
+    s6_obstacle_side_required = false;
+    s6_obstacle_side_decision_pending = false;
+    s6_obstacle_side_decision_done = false;
     MissionTask_ResetS6XConfirmation();
   }
   if ((state == MISSION_STATE_S7_SEARCH_RED) ||
@@ -582,7 +605,7 @@ static void MissionTask_EnterState(MissionState state, uint32_t now)
       (void)DebugUart_Log("[MISSION] S4_WAIT_RX_12\r\n");
       break;
     case MISSION_STATE_S4_WAIT_FINAL_READY:
-      (void)DebugUart_Log("[MISSION] S4_WAIT_RX_24\r\n");
+      (void)DebugUart_Log("[MISSION] S4_WAIT_RX_04_14_24_E4_E2\r\n");
       break;
     case MISSION_STATE_S4_POST22_REVERSE:
     case MISSION_STATE_S4_POST22_TURN_LEFT:
@@ -705,6 +728,9 @@ static void MissionTask_EnterState(MissionState state, uint32_t now)
       break;
     case MISSION_STATE_S6_FINAL_ALIGN:
       (void)DebugUart_Log("[MISSION] S6_FINAL_ALIGN\r\n");
+      break;
+    case MISSION_STATE_S6_FINAL_VERIFY:
+      (void)DebugUart_Log("[MISSION] S6_FINAL_VERIFY\r\n");
       break;
     case MISSION_STATE_S6_RAISE_FRAME:
       (void)DebugUart_Log("[MISSION] S6_RAISE_FRAME\r\n");
@@ -831,6 +857,7 @@ static void MissionTask_StartS1(uint32_t now)
 {
   s7_target_switch_enabled = false;
   s3_target_select_command = MAIXCAM_COMMAND_SELECT_GREEN;
+  s4_post22_search_active = false;
   s4_arrange_cycle_count = 0U;
   int32_t yaw_delta;
 
@@ -1303,6 +1330,34 @@ static void MissionTask_DebugS3(uint32_t now)
       (int)right_actual_rpm);
 }
 
+static void MissionTask_StartS4TrackCenterFrom04(uint32_t now)
+{
+  MissionTask_ResetVisionPid();
+  MaixCam_ClearObject();
+  mission_snapshot.vision_target_valid = false;
+  if (Actuator_SetCameraWideView() != HAL_OK)
+  {
+    mission_snapshot.fault_flags |= MISSION_FAULT_ACTUATOR;
+    MissionTask_EnterState(MISSION_STATE_FAULT, now);
+    return;
+  }
+
+  s4_next_debug_tick = now;
+  s4_center_target_lost_since = now;
+  s4_center_search_sweep_completed = false;
+  MissionTask_EnterState(MISSION_STATE_S4_TRACK_CENTER, now);
+  if (MaixCam_SendCommand(MAIXCAM_COMMAND_TRACK_CENTER_ACK) != HAL_OK)
+  {
+    mission_snapshot.fault_flags |= MISSION_FAULT_VISION_TX;
+    MissionTask_EnterState(MISSION_STATE_FAULT, now);
+    return;
+  }
+  (void)DebugUart_Log("[S4] TX E1 E2 04 1E 2E, ACK RX04\r\n");
+  (void)DebugUart_Logf(
+      "[S4] RX04 FRAME ALREADY DOWN, CAMERA WIDE=%u, TRACK CENTER\r\n",
+      (unsigned int)ROBOT_CAMERA_WIDE_ANGLE_DEG);
+}
+
 static bool MissionTask_TryStartS3Capture(uint32_t now)
 {
   uint8_t event_code;
@@ -1361,30 +1416,7 @@ static bool MissionTask_TryStartS3Capture(uint32_t now)
   }
 
   (void)DebugUart_Log("[S3] RX F1 F2 04 1F 2F, OBJECT IN FRAME\r\n");
-  MissionTask_ResetVisionPid();
-  MaixCam_ClearObject();
-  mission_snapshot.vision_target_valid = false;
-  if (Actuator_SetCameraWideView() != HAL_OK)
-  {
-    mission_snapshot.fault_flags |= MISSION_FAULT_ACTUATOR;
-    MissionTask_EnterState(MISSION_STATE_FAULT, now);
-    return true;
-  }
-
-  s4_next_debug_tick = now;
-  s4_center_target_lost_since = now;
-  s4_center_search_sweep_completed = false;
-  MissionTask_EnterState(MISSION_STATE_S4_TRACK_CENTER, now);
-  if (MaixCam_SendCommand(MAIXCAM_COMMAND_TRACK_CENTER_ACK) != HAL_OK)
-  {
-    mission_snapshot.fault_flags |= MISSION_FAULT_VISION_TX;
-    MissionTask_EnterState(MISSION_STATE_FAULT, now);
-    return true;
-  }
-  (void)DebugUart_Log("[S4] TX E1 E2 04 1E 2E, ACK RX04\r\n");
-  (void)DebugUart_Logf(
-      "[S4] RX04 FRAME ALREADY DOWN, CAMERA WIDE=%u, TRACK CENTER\r\n",
-      (unsigned int)ROBOT_CAMERA_WIDE_ANGLE_DEG);
+  MissionTask_StartS4TrackCenterFrom04(now);
   return true;
 }
 
@@ -3093,10 +3125,53 @@ static void MissionTask_StartS4Post22Recovery(uint32_t now)
   s6_phase_stable_since = 0U;
   MissionTask_EnterState(MISSION_STATE_S4_POST22_REVERSE, now);
   (void)DebugUart_Logf(
-      "[S4-22E2] REVERSE rpm=%d time=%lums LEFT45=%ld RIGHT90=%ld, RX24 INTERRUPTS\r\n",
+      "[S4-22E2] REVERSE rpm=%d time=%lums LEFT45=%ld RIGHT90=%ld, %s CAN INTERRUPT\r\n",
       ROBOT_S4_POST22_REVERSE_RPM,
       (unsigned long)ROBOT_S4_POST22_REVERSE_MS,
-      (long)s4_post22_left_yaw_cdeg, (long)s4_post22_right_yaw_cdeg);
+      (long)s4_post22_left_yaw_cdeg, (long)s4_post22_right_yaw_cdeg,
+      s4_post22_search_active ? "RX04/24 OR 03 COORDINATES" : "RX04/24");
+}
+
+static void MissionTask_ResumeS3FromPost22Search(uint32_t now)
+{
+  MissionTask_StopWheels();
+  MissionTask_ResetVisionControllerState();
+  MissionTask_ResetS6ControllerState();
+  /* Keep the fresh error and a possibly queued 04 handshake for S3. */
+  s4_post22_search_active = false;
+  s4_e4_protocol_active = false;
+  s3_track_stable_since = 0U;
+  s3_search_sweep_completed = false;
+  s3_search_origin_yaw_cdeg = MissionTask_WrapYaw(mission_snapshot.yaw_cdeg);
+  vision_search_resume_state = MISSION_STATE_S3_TRACK_GREEN;
+  s3_target_lost_since = 0U;
+  s3_wait_event04_logged = false;
+  s3_next_debug_tick = now;
+  MissionTask_EnterState(MISSION_STATE_S3_TRACK_GREEN, now);
+  (void)DebugUart_Logf(
+      "[S4-22E2] 03 TARGET FOUND id=%u x=%d y=%d, STOP RECOVERY AND TRACK03\r\n",
+      (unsigned int)mission_snapshot.target_id,
+      (int)mission_snapshot.vision_x_error_px,
+      (int)mission_snapshot.vision_y_error_px);
+}
+
+static bool MissionTask_StartPost22BlackGreenSearch(uint32_t now)
+{
+  MissionTask_StopWheels();
+  MaixCam_ClearEvent();
+  MaixCam_ClearObject();
+  mission_snapshot.vision_target_valid = false;
+  if ((MaixCam_SendCommand(MAIXCAM_COMMAND_SELECT_BLACK_GREEN) != HAL_OK) ||
+      (MaixCam_SendCommand(MAIXCAM_COMMAND_SEARCH_TARGET) != HAL_OK))
+  {
+    mission_snapshot.fault_flags |= MISSION_FAULT_VISION_TX;
+    MissionTask_EnterState(MISSION_STATE_FAULT, now);
+    return false;
+  }
+  s3_target_select_command = MAIXCAM_COMMAND_SELECT_BLACK_GREEN;
+  s4_post22_search_active = true;
+  (void)DebugUart_Log("[S4-22E2] TX51 THEN TX03, SEARCH BLACK/GREEN DURING RECOVERY\r\n");
+  return true;
 }
 
 static void MissionTask_RunS4Post22Recovery(uint32_t now)
@@ -3114,17 +3189,33 @@ static void MissionTask_RunS4Post22Recovery(uint32_t now)
     {
       MissionTask_StopWheels();
       MissionTask_ResetS6ControllerState();
+      s4_post22_search_active = false;
       (void)DebugUart_Log("[S4-22E2] RX24, STOP RECOVERY AND RAISE FRAME\r\n");
       MissionTask_SkipToS4FinalTrack(now);
       return;
     }
-    /* Repeated E2 must not restart a running recovery. Coordinates alone
-       do not interrupt: MaixCam confirms this transition with command 24. */
+    if (event_code == MAIXCAM_EVENT_OBJECT_IN_FRAME)
+    {
+      MissionTask_StopWheels();
+      MissionTask_ResetS6ControllerState();
+      s4_post22_search_active = false;
+      (void)DebugUart_Log("[S4-22E2] RX04, STOP RECOVERY AND TRACK CENTER\r\n");
+      MissionTask_StartS4TrackCenterFrom04(now);
+      return;
+    }
+    /* Repeated E2 must not restart a running recovery. */
     if (event_code != MAIXCAM_EVENT_ARRANGE_TARGET_LOST)
     {
-      (void)DebugUart_Logf("[S4-22E2] RX%02X, WAIT24\r\n",
+      (void)DebugUart_Logf("[S4-22E2] RX%02X, WAIT04/24\r\n",
                            (unsigned int)event_code);
     }
+  }
+  if (s4_post22_search_active && mission_snapshot.vision_target_valid &&
+      ((mission_snapshot.target_id == 5U) ||
+       (mission_snapshot.target_id == 6U)))
+  {
+    MissionTask_ResumeS3FromPost22Search(now);
+    return;
   }
   switch (mission_snapshot.state)
   {
@@ -3154,7 +3245,9 @@ static void MissionTask_RunS4Post22Recovery(uint32_t now)
         MissionTask_StopWheels();
         MissionTask_ResetS6ControllerState();
         MissionTask_EnterState(MISSION_STATE_S4_WAIT_FINAL_READY, now);
-        (void)DebugUart_Log("[S4-22E2] RECOVERY DONE, FRAME DOWN WAIT24 OR NEXT E2\r\n");
+        (void)DebugUart_Log(s4_post22_search_active
+            ? "[S4-22E2] RECOVERY DONE, FRAME DOWN WAIT03 TARGET\r\n"
+            : "[S4-22E2] RECOVERY DONE, FRAME DOWN WAIT04/24 OR NEXT E2\r\n");
       }
       break;
     default:
@@ -3372,37 +3465,69 @@ static void MissionTask_RunS4Arrange(uint32_t now)
         return;
       }
       (void)DebugUart_Log(
-          "[S4] 12 COMPLETE, TX E1 E2 22 1E 2E, FRAME DOWN WAIT RX24\r\n");
+          "[S4] 12 COMPLETE, TX E1 E2 22 1E 2E, FRAME DOWN WAIT RX04/14/24/E4/E2\r\n");
       break;
 
     case MISSION_STATE_S4_WAIT_FINAL_READY:
       MissionTask_StopWheels();
       if (MaixCam_TakeEvent(&event_code))
       {
-        if (event_code == MAIXCAM_EVENT_CENTER_REACHED)
+        if (event_code == MAIXCAM_EVENT_OBJECT_IN_FRAME)
         {
-          MissionTask_AckS4Center(now);
+          s4_post22_search_active = false;
+          MissionTask_StartS4TrackCenterFrom04(now);
           return;
         }
         if (event_code == MAIXCAM_EVENT_SKIP_TO_FINAL_TRACK)
         {
+          s4_post22_search_active = false;
           MissionTask_SkipToS4FinalTrack(now);
           return;
         }
-        if (event_code == MAIXCAM_EVENT_ARRANGE_TARGET_LOST)
+        if (!s4_post22_search_active)
+        {
+          if (event_code == MAIXCAM_EVENT_CENTER_REACHED)
+          {
+            MissionTask_AckS4Center(now);
+            return;
+          }
+          if (event_code == MAIXCAM_EVENT_CENTER_TARGET_LOST)
+          {
+            MissionTask_StartS4E4Recovery(now);
+            return;
+          }
+          if (event_code == MAIXCAM_EVENT_ARRANGE_TARGET_LOST)
+          {
+            if (s7_target_switch_enabled &&
+                !MissionTask_StartPost22BlackGreenSearch(now))
+            {
+              return;
+            }
+            MissionTask_StartS4Post22Recovery(now);
+            return;
+          }
+        }
+        (void)DebugUart_Logf(
+            "[S4] RX EVENT %02X, WAIT RX04/14/24/E4/E2 AFTER TX22\r\n",
+            (unsigned int)event_code);
+      }
+      if (s4_post22_search_active && mission_snapshot.vision_target_valid &&
+          ((mission_snapshot.target_id == 5U) ||
+           (mission_snapshot.target_id == 6U)))
+      {
+        MissionTask_ResumeS3FromPost22Search(now);
+        return;
+      }
+      if (elapsed >= ROBOT_S4_HANDSHAKE_TIMEOUT_MS)
+      {
+        if (s4_post22_search_active || !s7_target_switch_enabled)
         {
           MissionTask_StartS4Post22Recovery(now);
           return;
         }
-        (void)DebugUart_Logf(
-            "[S4] RX EVENT %02X, WAIT RX14/24/E2 AFTER TX22\r\n",
-            (unsigned int)event_code);
-      }
-      if (elapsed >= ROBOT_S4_HANDSHAKE_TIMEOUT_MS)
-      {
         mission_snapshot.fault_flags |= MISSION_FAULT_S4_TIMEOUT;
         MissionTask_EnterState(MISSION_STATE_FAULT, now);
-        (void)DebugUart_Log("[S4] WAIT RX24 AFTER TX22 TIMEOUT\r\n");
+        (void)DebugUart_Log("[S4] WAIT RX04/14/24/E4/E2 AFTER TX22 TIMEOUT\r\n");
       }
       break;
 
@@ -3828,6 +3953,10 @@ static void MissionTask_RunS5WaitSingleGreen(uint32_t now)
   s6_track_accounting_tick = now;
   s6_align26_pending = false;
   s6_pre_reposition_decision_pending = false;
+  s6_supply_y_started = false;
+  s6_obstacle_side_required = false;
+  s6_obstacle_side_decision_pending = false;
+  s6_obstacle_side_decision_done = false;
   MissionTask_ResetS6XConfirmation();
   s6_recovery_count = 0U;
   MissionTask_EnterState(MISSION_STATE_S6_SEARCH_SAFE_ZONE, now);
@@ -3863,10 +3992,15 @@ typedef struct
 
 static const MissionSideRule s6_side_rules[] = { ROBOT_S6_SIDE_RULE_ROWS };
 
-static const MissionSideRule *MissionTask_GetS6SideRule(void)
+static const MissionSideRule *MissionTask_GetS6SideRule(
+    int32_t decision_yaw_cdeg, bool *has_calibrated_rule)
 {
   uint32_t i;
   uint8_t kind;
+  int32_t yaw_from_start = MissionTask_WrapYaw(
+      decision_yaw_cdeg - mission_snapshot.yaw_start_cdeg);
+
+  *has_calibrated_rule = false;
 
   if (MissionTask_S6IsSupplyTarget())
   {
@@ -3886,30 +4020,31 @@ static const MissionSideRule *MissionTask_GetS6SideRule(void)
     if (rule->enabled && (rule->start_zone == mission_snapshot.start_zone) &&
         (rule->team == mission_snapshot.team) && (rule->target_kind == kind))
     {
-      return rule;
+      int32_t span = MissionTask_WrapYaw(
+          rule->sector_end_cdeg - rule->sector_start_cdeg);
+      int32_t position = MissionTask_WrapYaw(
+          yaw_from_start - rule->sector_start_cdeg);
+      *has_calibrated_rule = true;
+      if (((position > 0L) || rule->include_start) &&
+          ((position < span) || ((position == span) && rule->include_end)))
+      {
+        return rule;
+      }
     }
   }
   return NULL;
 }
 
-static bool MissionTask_S6NeedsSideReposition(void)
+static bool MissionTask_S6NeedsSideReposition(int32_t decision_yaw_cdeg)
 {
-  const MissionSideRule *rule = MissionTask_GetS6SideRule();
+  bool has_calibrated_rule;
+  const MissionSideRule *rule = MissionTask_GetS6SideRule(
+      decision_yaw_cdeg, &has_calibrated_rule);
   int32_t yaw_error = MissionTask_YawError(
       mission_snapshot.safe_zone_yaw_target_cdeg,
-      mission_snapshot.yaw_cdeg);
+      decision_yaw_cdeg);
 
-  if (rule != NULL)
-  {
-    int32_t yaw_from_start = MissionTask_WrapYaw(
-        mission_snapshot.yaw_cdeg - mission_snapshot.yaw_start_cdeg);
-    int32_t span = MissionTask_WrapYaw(
-        rule->sector_end_cdeg - rule->sector_start_cdeg);
-    int32_t position = MissionTask_WrapYaw(
-        yaw_from_start - rule->sector_start_cdeg);
-    return ((position > 0L) || rule->include_start) &&
-           ((position < span) || ((position == span) && rule->include_end));
-  }
+  if (has_calibrated_rule) return rule != NULL;
   /* Compatibility fallback until this zone/team has been calibrated. */
   if (MissionTask_S6IsSupplyTarget())
   {
@@ -3926,9 +4061,12 @@ static bool MissionTask_S6NeedsSideReposition(void)
          (yaw_error >= -ROBOT_S6_REPOSITION_SECTOR_CDEG);
 }
 
-static void MissionTask_StartS6SideReposition(uint32_t now)
+static void MissionTask_StartS6SideReposition(uint32_t now,
+                                               int32_t decision_yaw_cdeg)
 {
-  const MissionSideRule *rule = MissionTask_GetS6SideRule();
+  bool has_calibrated_rule;
+  const MissionSideRule *rule = MissionTask_GetS6SideRule(
+      decision_yaw_cdeg, &has_calibrated_rule);
   int32_t current_relative_cdeg;
   int32_t target_relative_cdeg;
   int32_t safe_relative_cdeg;
@@ -3971,7 +4109,11 @@ static void MissionTask_StartS6SideReposition(uint32_t now)
   safe_relative_cdeg = MissionTask_WrapYaw(
       mission_snapshot.safe_zone_yaw_target_cdeg - mission_snapshot.yaw_start_cdeg);
   (void)DebugUart_Logf(
-      "[S6-P-ANGLE] relative_deg current=%ld.%02ld target=%ld.%02ld safe=%ld.%02ld\r\n",
+      "[S6-P-ANGLE] relative_deg decision=%ld.%02ld current=%ld.%02ld target=%ld.%02ld safe=%ld.%02ld\r\n",
+      (long)(MissionTask_WrapYaw(decision_yaw_cdeg -
+          mission_snapshot.yaw_start_cdeg) / 100L),
+      (long)(MissionTask_WrapYaw(decision_yaw_cdeg -
+          mission_snapshot.yaw_start_cdeg) % 100L),
       (long)(current_relative_cdeg / 100L),
       (long)(current_relative_cdeg % 100L),
       (long)(target_relative_cdeg / 100L),
@@ -3989,8 +4131,22 @@ static void MissionTask_ResetS6XConfirmation(void)
 {
   s6_x_align_frames = 0U;
   s6_x_align_first_tick = 0U;
+  s6_side_x_align_frames = 0U;
+  s6_side_x_align_first_tick = 0U;
   s6_x_align_last_tick = 0U;
   s6_x_align_has_sequence = false;
+}
+
+static bool MissionTask_S6SideXConfirmed(void)
+{
+  return mission_snapshot.vision_target_valid &&
+      mission_snapshot.target_age_ms <= ROBOT_VISION_COORD_DECEL_START_MS &&
+      s6_x_align_has_sequence &&
+      mission_snapshot.target_sequence == s6_x_align_last_sequence &&
+      mission_snapshot.target_id == s6_x_align_id &&
+      MissionTask_Abs32(mission_snapshot.vision_x_error_px) <= ROBOT_S6_SIDE_X_TOLERANCE_PX &&
+      s6_side_x_align_frames >= ROBOT_S6_X_ALIGN_MIN_FRAMES &&
+      (uint32_t)(s6_x_align_last_tick - s6_side_x_align_first_tick) >= ROBOT_S6_X_ALIGN_STABLE_MS;
 }
 
 static bool MissionTask_S6XConfirmed(void)
@@ -4012,14 +4168,14 @@ static bool MissionTask_UpdateS6XConfirmation(uint32_t now)
   if (!mission_snapshot.vision_target_valid)
   {
     MissionTask_ResetS6XConfirmation();
-    s6_pre_reposition_decision_pending = true;
+    s6_pre_reposition_decision_pending = !s6_obstacle_side_decision_done;
     return false;
   }
   /* An aging cached frame may drive deceleration, but cannot prove alignment. */
   if (mission_snapshot.target_age_ms > ROBOT_VISION_COORD_DECEL_START_MS) return false;
   if (s6_x_align_has_sequence &&
       mission_snapshot.target_sequence == s6_x_align_last_sequence)
-    return MissionTask_S6XConfirmed();
+    return MissionTask_S6SideXConfirmed();
 
   consecutive = s6_x_align_has_sequence &&
       (uint32_t)(mission_snapshot.target_sequence - s6_x_align_last_sequence) == 1U &&
@@ -4029,6 +4185,17 @@ static bool MissionTask_UpdateS6XConfirmation(uint32_t now)
   s6_x_align_id = mission_snapshot.target_id;
   s6_x_align_last_tick = receipt_tick;
   s6_x_align_has_sequence = true;
+  if (MissionTask_Abs32(mission_snapshot.vision_x_error_px) > ROBOT_S6_SIDE_X_TOLERANCE_PX)
+    s6_side_x_align_frames = 0U;
+  else
+  {
+    if (!consecutive || s6_side_x_align_frames == 0U)
+    {
+      s6_side_x_align_frames = 0U;
+      s6_side_x_align_first_tick = receipt_tick;
+    }
+    if (s6_side_x_align_frames < UINT8_MAX) ++s6_side_x_align_frames;
+  }
   if (MissionTask_Abs32(mission_snapshot.vision_x_error_px) > ROBOT_VISION_X_TOLERANCE_PX)
     s6_x_align_frames = 0U;
   else
@@ -4041,12 +4208,14 @@ static bool MissionTask_UpdateS6XConfirmation(uint32_t now)
     if (s6_x_align_frames < UINT8_MAX) ++s6_x_align_frames;
   }
   if (s6_pre_reposition_decision_pending || s6_align26_pending)
-    (void)DebugUart_Logf("[S6-X] seq=%lu x=%d frames=%u span=%lums ready=%u\r\n",
+    (void)DebugUart_Logf("[S6-X] seq=%lu x=%d side=%u span=%lums ready=%u final=%u ready=%u\r\n",
         (unsigned long)s6_x_align_last_sequence, (int)mission_snapshot.vision_x_error_px,
+        (unsigned int)s6_side_x_align_frames,
+        (unsigned long)(s6_side_x_align_frames ? s6_x_align_last_tick - s6_side_x_align_first_tick : 0U),
+        MissionTask_S6SideXConfirmed() ? 1U : 0U,
         (unsigned int)s6_x_align_frames,
-        (unsigned long)(s6_x_align_frames ? s6_x_align_last_tick - s6_x_align_first_tick : 0U),
         MissionTask_S6XConfirmed() ? 1U : 0U);
-  return MissionTask_S6XConfirmed();
+  return MissionTask_S6SideXConfirmed();
 }
 
 static void MissionTask_StartS6VisionApproach(uint32_t now)
@@ -4056,17 +4225,18 @@ static void MissionTask_StartS6VisionApproach(uint32_t now)
   MissionTask_ResetVisionControllerState();
   MissionTask_ResetS6ControllerState();
   MissionTask_ResetS6XConfirmation();
-  s6_pre_reposition_decision_pending = true;
+  s6_pre_reposition_decision_pending = !s6_obstacle_side_decision_done;
   s6_approach_start_tick = now;
   s6_missing_since = mission_snapshot.vision_target_valid ? 0U : now;
   s6_recovery_count = 0U;
   s6_next_debug_tick = now;
   MissionTask_EnterState(MISSION_STATE_S6_TRACK_SAFE_ZONE, now);
   (void)DebugUart_Logf(
-      "[S6] VISION PID APPROACH yaw=%ld safe=%ld reposition=%u, X CONFIRM BEFORE YAW DECISION\r\n",
+      "[S6] VISION APPROACH yaw=%ld safe=%ld reposition=%u supply_y_started=%u\r\n",
       (long)MissionTask_WrapYaw(mission_snapshot.yaw_cdeg),
       (long)mission_snapshot.safe_zone_yaw_target_cdeg,
-      (unsigned int)s6_reposition_count);
+      (unsigned int)s6_reposition_count,
+      s6_supply_y_started ? 1U : 0U);
 }
 
 static void MissionTask_EnterS6TrackingFrom16(uint32_t now)
@@ -4083,19 +4253,22 @@ static void MissionTask_EnterS6TrackingFrom16(uint32_t now)
   MissionTask_ResetS6ControllerState();
   s6_approach_start_tick = now;
   s6_reposition_count = 0U;
+  s6_supply_y_started = false;
   s6_recovery_count = 0U;
   s6_next_debug_tick = now;
   MissionTask_StartS6VisionApproach(now);
   (void)DebugUart_Logf(
-      "[S6] X ALIGN +/- %dpx, %u NEW FRAMES OVER %lums, THEN CHECK ANGLE\r\n",
-      ROBOT_VISION_X_TOLERANCE_PX, (unsigned int)ROBOT_S6_X_ALIGN_MIN_FRAMES,
+      "[S6] SIDE X +/- %dpx, FINAL X +/- %dpx, %u NEW FRAMES OVER %lums\r\n",
+      ROBOT_S6_SIDE_X_TOLERANCE_PX, ROBOT_VISION_X_TOLERANCE_PX,
+      (unsigned int)ROBOT_S6_X_ALIGN_MIN_FRAMES,
       (unsigned long)ROBOT_S6_X_ALIGN_STABLE_MS);
 }
 
 static bool MissionTask_DecideS6Side(uint32_t now, const char *source)
 {
-  if (!MissionTask_S6XConfirmed()) return false;
-  bool needs_side = MissionTask_S6NeedsSideReposition();
+  if (!MissionTask_S6SideXConfirmed()) return false;
+  bool needs_side = MissionTask_S6NeedsSideReposition(
+      mission_snapshot.yaw_cdeg);
   s6_pre_reposition_decision_pending = false;
   (void)DebugUart_Logf(
       "[S6-DEC] src=%s target=%02X id=%u zone=%u team=%u x_frames=%u\r\n",
@@ -4103,24 +4276,96 @@ static bool MissionTask_DecideS6Side(uint32_t now, const char *source)
       (unsigned int)mission_snapshot.target_id,
       (unsigned int)mission_snapshot.start_zone,
       (unsigned int)mission_snapshot.team,
-      (unsigned int)s6_x_align_frames);
+      (unsigned int)s6_side_x_align_frames);
   (void)DebugUart_Logf(
       "[S6-DEC] field=%ld safe=%ld result=%s pending26=%u\r\n",
       (long)MissionTask_WrapYaw(mission_snapshot.yaw_cdeg - mission_snapshot.yaw_start_cdeg),
       (long)MissionTask_WrapYaw(mission_snapshot.safe_zone_yaw_target_cdeg -
                                mission_snapshot.yaw_start_cdeg),
       needs_side ? "SIDE" : "NO_SIDE", s6_align26_pending ? 1U : 0U);
-  if (needs_side) MissionTask_StartS6SideReposition(now);
+  if (needs_side) MissionTask_StartS6SideReposition(
+      now, mission_snapshot.yaw_cdeg);
   return needs_side;
+}
+
+static bool MissionTask_TryStartS6SupplySide(uint32_t now)
+{
+  int32_t field_yaw_cdeg;
+
+  if (!MissionTask_S6IsSupplyTarget() || s6_supply_y_started ||
+      !s6_pre_reposition_decision_pending ||
+      s6_obstacle_side_decision_pending || s6_obstacle_side_decision_done ||
+      !mission_snapshot.vision_target_valid ||
+      mission_snapshot.target_age_ms > ROBOT_VISION_COORD_DECEL_START_MS ||
+      MissionTask_Abs32(mission_snapshot.vision_x_error_px) <=
+          ROBOT_S6_SIDE_X_TOLERANCE_PX ||
+      !MissionTask_S6NeedsSideReposition(mission_snapshot.yaw_cdeg))
+  {
+    return false;
+  }
+
+  field_yaw_cdeg = MissionTask_WrapYaw(
+      mission_snapshot.yaw_cdeg - mission_snapshot.yaw_start_cdeg);
+  s6_pre_reposition_decision_pending = false;
+  (void)DebugUart_Logf(
+      "[S6-DEC] SUPPLY SIDE BEFORE X ALIGN x=%d field=%ld pending26=%u\r\n",
+      (int)mission_snapshot.vision_x_error_px, (long)field_yaw_cdeg,
+      s6_align26_pending ? 1U : 0U);
+  MissionTask_StartS6SideReposition(now, mission_snapshot.yaw_cdeg);
+  return true;
+}
+
+static void MissionTask_StartS6FinalVerify(uint32_t now)
+{
+  MissionTask_StopWheels();
+  MaixCam_ClearObject();
+  mission_snapshot.vision_target_valid = false;
+  MissionTask_ResetS6XConfirmation();
+  s6_final_off_center_frames = 0U;
+  s6_final_off_center_sign = 0;
+  s6_final_off_center_last_tick = 0U;
+  s6_final_off_center_last_sequence = 0U;
+  s6_align26_pending = false;
+  mission_snapshot.safe_zone_fixed_heading_active = true;
+  MissionTask_EnterState(MISSION_STATE_S6_FINAL_VERIFY, now);
+  (void)DebugUart_Logf(
+      "[S6-FINAL] VERIFY AFTER %s: fresh X +/- %dpx and yaw +/- %ldcdeg\r\n",
+      s6_final_pre_reverse_done ? "PRE-REVERSE" : "TURN",
+      ROBOT_VISION_X_TOLERANCE_PX,
+      (long)ROBOT_S6_TURN_TOLERANCE_CDEG);
+}
+
+static void MissionTask_StartS6FinalSideCorrection(uint32_t now, int8_t x_sign)
+{
+  MissionTask_StopWheels();
+  MaixCam_ClearObject();
+  mission_snapshot.vision_target_valid = false;
+  MissionTask_ResetVisionPid();
+  MissionTask_ResetS6ControllerState();
+  MissionTask_ResetS6XConfirmation();
+  s6_phase_stable_since = 0U;
+  s6_approach_start_tick = now;
+  s6_reposition_side_yaw_cdeg = MissionTask_WrapYaw(
+      s6_push_yaw_target_cdeg - (int32_t)x_sign *
+          (int32_t)ROBOT_YAW_LEFT_SIGN * ROBOT_S6_REPOSITION_SECTOR_CDEG);
+  s6_final_side_correction_active = true;
+  ++s6_final_side_attempts;
+  ++s6_reposition_count;
+  MissionTask_EnterState(MISSION_STATE_S6_REPOSITION_TURN_SIDE, now);
+  (void)DebugUart_Logf(
+      "[S6-FINAL] SIDE CORRECT #%u x_sign=%d side_yaw=%ld drive=%lums\r\n",
+      (unsigned int)s6_final_side_attempts, (int)x_sign,
+      (long)s6_reposition_side_yaw_cdeg,
+      (unsigned long)ROBOT_S6_FINAL_SIDE_FORWARD_MS);
 }
 
 static void MissionTask_StartS6FinalFrom26(uint32_t now)
 {
-  /* A latched 26 never bypasses confirmation from new visual coordinates. */
-  if (!MissionTask_S6XConfirmed()) return;
   MissionTask_StopWheels();
-  if (MissionTask_DecideS6Side(now, "RX26")) return;
   s6_align26_pending = false;
+  s6_final_pre_reverse_done = false;
+  s6_final_side_correction_active = false;
+  s6_final_side_attempts = 0U;
   s6_push_yaw_target_cdeg = MissionTask_WrapYaw(mission_snapshot.safe_zone_yaw_target_cdeg);
   MaixCam_ClearObject();
   mission_snapshot.vision_target_valid = false;
@@ -4163,7 +4408,7 @@ static void MissionTask_HandleS6AlignRequest(uint32_t now)
                           (unsigned int)state);
     }
   }
-  /* Only the common visual-tracking path may consume 26 after X confirmation. */
+  /* Only the common visual-tracking path consumes the latched 26. */
 }
 
 static void MissionTask_StartS6Recovery(uint32_t now,
@@ -4604,7 +4849,9 @@ static void MissionTask_RunS6SideReposition(uint32_t now)
         (void)DebugUart_Logf(
             "[S6-P] SIDE ALIGNED, FORWARD rpm=%d time=%lums\r\n",
             ROBOT_S6_REPOSITION_FORWARD_RPM,
-            (unsigned long)ROBOT_S6_REPOSITION_FORWARD_MS);
+            (unsigned long)(s6_final_side_correction_active
+                ? ROBOT_S6_FINAL_SIDE_FORWARD_MS
+                : ROBOT_S6_REPOSITION_FORWARD_MS));
         (void)DebugUart_Logf(
             "[S6-P-ANGLE] TURN DONE current_relative_cdeg=%ld target_relative_cdeg=%ld\r\n",
             (long)MissionTask_WrapYaw(
@@ -4615,7 +4862,9 @@ static void MissionTask_RunS6SideReposition(uint32_t now)
       break;
 
     case MISSION_STATE_S6_REPOSITION_FORWARD:
-      if (elapsed < ROBOT_S6_REPOSITION_FORWARD_MS)
+      if (elapsed < (s6_final_side_correction_active
+              ? ROBOT_S6_FINAL_SIDE_FORWARD_MS
+              : ROBOT_S6_REPOSITION_FORWARD_MS))
       {
         MissionTask_CommandS6Straight(
             now,
@@ -4645,6 +4894,12 @@ static void MissionTask_RunS6SideReposition(uint32_t now)
         return;
       MaixCam_ClearObject();
       mission_snapshot.vision_target_valid = false;
+      if (s6_final_side_correction_active)
+      {
+        s6_final_side_correction_active = false;
+        MissionTask_StartS6FinalVerify(now);
+        break;
+      }
       MissionTask_StartS6VisionApproach(now);
       (void)DebugUart_Log("[S6-P] RETURNED TO SAFE HEADING, RECONFIRM X WITH NEW COORDINATES\r\n");
       break;
@@ -4833,6 +5088,18 @@ static void MissionTask_RunS6Recovery(uint32_t now)
 
 static void MissionTask_StartS6ObstacleAvoidance(uint32_t now)
 {
+  /* The side-sector decision must use the heading from before the 36 move. */
+  s6_obstacle_decision_yaw_cdeg = MissionTask_WrapYaw(
+      mission_snapshot.yaw_cdeg);
+  s6_obstacle_side_required = MissionTask_S6NeedsSideReposition(
+      s6_obstacle_decision_yaw_cdeg);
+  s6_obstacle_side_decision_pending = true;
+  s6_obstacle_side_decision_done = false;
+  (void)DebugUart_Logf(
+      "[S6-O] SAVE pre36_yaw=%ld side=%u pending26=%u\r\n",
+      (long)s6_obstacle_decision_yaw_cdeg,
+      s6_obstacle_side_required ? 1U : 0U,
+      s6_align26_pending ? 1U : 0U);
   MissionTask_StopWheels();
   s6_obstacle_left_yaw_cdeg = MissionTask_WrapYaw(
       mission_snapshot.yaw_cdeg + (int32_t)ROBOT_YAW_LEFT_SIGN *
@@ -4952,6 +5219,7 @@ static void MissionTask_RunS6TrackTimeoutReverse(uint32_t now)
 static void MissionTask_RunS6TrackSafeZone(uint32_t now)
 {
   uint8_t event_code;
+  bool side_x_ready;
   int32_t absolute_x_error;
   int32_t absolute_y_error;
   int16_t turn_rpm;
@@ -4969,6 +5237,16 @@ static void MissionTask_RunS6TrackSafeZone(uint32_t now)
   if (event_code == MAIXCAM_EVENT_SAFE_ZONE_OBSTACLE)
   {
     MissionTask_StartS6ObstacleAvoidance(now);
+    return;
+  }
+
+  /* Neither target type waits for pre-turn X confirmation after 26.
+     A pending pre-36 side decision still takes precedence; final X/yaw
+     confirmation happens after turning to the safe heading. */
+  if (s6_align26_pending && !s6_obstacle_side_decision_pending)
+  {
+    if (MissionTask_TryStartS6SupplySide(now)) return;
+    MissionTask_StartS6FinalFrom26(now);
     return;
   }
 
@@ -5020,15 +5298,49 @@ static void MissionTask_RunS6TrackSafeZone(uint32_t now)
   s6_missing_since = 0U;
   s6_recovery_count = 0U;
 
-  if (MissionTask_UpdateS6XConfirmation(now))
+  side_x_ready = MissionTask_UpdateS6XConfirmation(now);
+  if (MissionTask_TryStartS6SupplySide(now)) return;
+
+  if (side_x_ready)
   {
+    if (s6_obstacle_side_decision_pending)
+    {
+      /* New coordinates have realigned X; honor the saved pre-36 decision. */
+      s6_obstacle_side_decision_pending = false;
+      s6_obstacle_side_decision_done = true;
+      s6_pre_reposition_decision_pending = false;
+      (void)DebugUart_Logf(
+          "[S6-O] FRESH X ALIGNED, saved_side=%u pending26=%u\r\n",
+          s6_obstacle_side_required ? 1U : 0U,
+          s6_align26_pending ? 1U : 0U);
+      if (s6_obstacle_side_required)
+      {
+        s6_obstacle_side_required = false;
+        MissionTask_StartS6SideReposition(
+            now, s6_obstacle_decision_yaw_cdeg);
+        return;
+      }
+    }
     if (s6_align26_pending)
     {
       MissionTask_StartS6FinalFrom26(now);
       return;
     }
-    if (s6_pre_reposition_decision_pending &&
+    if (!MissionTask_S6IsSupplyTarget() &&
+        !s6_obstacle_side_decision_done &&
+        s6_pre_reposition_decision_pending &&
         MissionTask_DecideS6Side(now, "X_CONFIRMED")) return;
+    if (MissionTask_S6IsSupplyTarget())
+    {
+      s6_pre_reposition_decision_pending = false;
+      if (!s6_align26_pending && !s6_supply_y_started)
+      {
+        s6_supply_y_started = true;
+        (void)DebugUart_Logf(
+            "[S6] SUPPLY X ALIGNED +/- %dpx, ENABLE Y APPROACH\r\n",
+            ROBOT_S6_SIDE_X_TOLERANCE_PX);
+      }
+    }
   }
 
   absolute_x_error = MissionTask_Abs32(
@@ -5058,7 +5370,8 @@ static void MissionTask_RunS6TrackSafeZone(uint32_t now)
     }
   }
 
-  if (absolute_y_error <= ROBOT_VISION_Y_TOLERANCE_PX)
+  /* Both supplies and casualties must align X before Y-axis approach. */
+  if (!side_x_ready || absolute_y_error <= ROBOT_VISION_Y_TOLERANCE_PX)
   {
     forward_rpm = 0;
     s3_y_pid_integral = 0.0f;
@@ -5106,12 +5419,126 @@ static void MissionTask_RunS6FinalAlign(uint32_t now)
   MissionTask_ResetS6ControllerState();
   mission_snapshot.safe_zone_fixed_heading_active = true;
   s6_next_debug_tick = now;
-  MissionTask_EnterState(MISSION_STATE_S6_PRE_PUSH_REVERSE, now);
+  MissionTask_StartS6FinalVerify(now);
+}
+
+static void MissionTask_RunS6FinalVerify(uint32_t now)
+{
+  int32_t yaw_error;
+  int8_t x_sign;
+  uint32_t receipt_tick;
+  bool consecutive;
+
+  if (mission_snapshot.state != MISSION_STATE_S6_FINAL_VERIFY) return;
+  MissionTask_StopWheels();
+  yaw_error = MissionTask_YawError(s6_push_yaw_target_cdeg,
+                                   mission_snapshot.yaw_cdeg);
+  mission_snapshot.safe_zone_yaw_error_cdeg = yaw_error;
+  mission_snapshot.safe_zone_fixed_heading_active = true;
+  if (MissionTask_Abs32(yaw_error) > ROBOT_S6_TURN_TOLERANCE_CDEG)
+  {
+    MaixCam_ClearObject();
+    mission_snapshot.vision_target_valid = false;
+    MissionTask_ResetS6XConfirmation();
+    s6_phase_stable_since = 0U;
+    MissionTask_EnterState(MISSION_STATE_S6_FINAL_ALIGN, now);
+    (void)DebugUart_Logf("[S6-FINAL] YAW DRIFT %ldcdeg, REALIGN\r\n",
+                         (long)yaw_error);
+    return;
+  }
+  if ((uint32_t)(now - mission_snapshot.state_entry_tick) >=
+      ROBOT_S6_FINAL_VERIFY_TIMEOUT_MS)
+  {
+    (void)DebugUart_Logf(
+        "[S6-FINAL] VERIFY TIMEOUT valid=%u age=%lu x=%d yaw_err=%ld\r\n",
+        mission_snapshot.vision_target_valid ? 1U : 0U,
+        (unsigned long)mission_snapshot.target_age_ms,
+        (int)mission_snapshot.vision_x_error_px, (long)yaw_error);
+    mission_snapshot.fault_flags |= MISSION_FAULT_S6_TIMEOUT;
+    MissionTask_EnterState(MISSION_STATE_FAULT, now);
+    return;
+  }
+  if (!mission_snapshot.vision_target_valid ||
+      mission_snapshot.target_age_ms > ROBOT_VISION_COORD_DECEL_START_MS)
+  {
+    s6_final_off_center_frames = 0U;
+    (void)MissionTask_UpdateS6XConfirmation(now);
+    return;
+  }
+
+  (void)MissionTask_UpdateS6XConfirmation(now);
+  if (MissionTask_S6XConfirmed())
+  {
+    (void)DebugUart_Logf(
+        "[S6-FINAL] PASS x=%d frames=%u yaw_err=%ld stage=%s\r\n",
+        (int)mission_snapshot.vision_x_error_px,
+        (unsigned int)s6_x_align_frames, (long)yaw_error,
+        s6_final_pre_reverse_done ? "PUSH" : "PRE-REVERSE");
+    MissionTask_ResetS6ControllerState();
+    mission_snapshot.safe_zone_fixed_heading_active = true;
+    if (s6_final_pre_reverse_done)
+    {
+      MissionTask_EnterState(MISSION_STATE_S6_FINAL_PUSH, now);
+      (void)DebugUart_Logf(
+          "[S6] FINAL PUSH rpm=%d time=%lums\r\n",
+          ROBOT_S6_FINAL_PUSH_RPM,
+          (unsigned long)ROBOT_S6_FINAL_PUSH_MS);
+    }
+    else
+    {
+      MissionTask_EnterState(MISSION_STATE_S6_PRE_PUSH_REVERSE, now);
+      (void)DebugUart_Logf(
+          "[S6] PRE-REVERSE rpm=%d time=%lums\r\n",
+          ROBOT_S6_PRE_PUSH_REVERSE_RPM,
+          (unsigned long)ROBOT_S6_PRE_PUSH_REVERSE_MS);
+    }
+    return;
+  }
+
+  x_sign = mission_snapshot.vision_x_error_px > ROBOT_VISION_X_TOLERANCE_PX
+      ? 1 : (mission_snapshot.vision_x_error_px <
+             -ROBOT_VISION_X_TOLERANCE_PX ? -1 : 0);
+  if (mission_snapshot.target_sequence == s6_final_off_center_last_sequence)
+    return;
+  receipt_tick = now - mission_snapshot.target_age_ms;
+  consecutive = s6_final_off_center_frames > 0U &&
+      (uint32_t)(mission_snapshot.target_sequence -
+                 s6_final_off_center_last_sequence) == 1U &&
+      mission_snapshot.target_id == s6_final_off_center_id &&
+      x_sign == s6_final_off_center_sign &&
+      (uint32_t)(receipt_tick - s6_final_off_center_last_tick) <=
+          ROBOT_S6_X_ALIGN_MAX_GAP_MS;
+  s6_final_off_center_last_sequence = mission_snapshot.target_sequence;
+  s6_final_off_center_last_tick = receipt_tick;
+  s6_final_off_center_id = mission_snapshot.target_id;
+  if (x_sign == 0)
+  {
+    s6_final_off_center_frames = 0U;
+    return;
+  }
+  if (!consecutive)
+  {
+    s6_final_off_center_frames = 0U;
+    s6_final_off_center_first_tick = receipt_tick;
+  }
+  s6_final_off_center_sign = x_sign;
+  if (s6_final_off_center_frames < UINT8_MAX)
+    ++s6_final_off_center_frames;
+  if (s6_final_off_center_frames < ROBOT_S6_X_ALIGN_MIN_FRAMES ||
+      (uint32_t)(receipt_tick - s6_final_off_center_first_tick) <
+          ROBOT_S6_X_ALIGN_STABLE_MS) return;
   (void)DebugUart_Logf(
-      "[S6] NORMAL ALIGNED yaw=%ld, PRE-REVERSE rpm=%d time=%lums\r\n",
-      (long)s6_push_yaw_target_cdeg,
-      ROBOT_S6_PRE_PUSH_REVERSE_RPM,
-      (unsigned long)ROBOT_S6_PRE_PUSH_REVERSE_MS);
+      "[S6-FINAL] X OUT x=%d frames=%u yaw_err=%ld attempts=%u\r\n",
+      (int)mission_snapshot.vision_x_error_px,
+      (unsigned int)s6_final_off_center_frames, (long)yaw_error,
+      (unsigned int)s6_final_side_attempts);
+  if (s6_final_side_attempts >= ROBOT_S6_FINAL_SIDE_MAX_ATTEMPTS)
+  {
+    mission_snapshot.fault_flags |= MISSION_FAULT_S6_TIMEOUT;
+    MissionTask_EnterState(MISSION_STATE_FAULT, now);
+    return;
+  }
+  MissionTask_StartS6FinalSideCorrection(now, x_sign);
 }
 
 static void MissionTask_RunS6RaiseFrame(uint32_t now)
@@ -5176,11 +5603,8 @@ static void MissionTask_RunS6PrePushReverse(uint32_t now)
   MissionTask_ResetS6ControllerState();
   mission_snapshot.safe_zone_fixed_heading_active = true;
   s6_next_debug_tick = now;
-  MissionTask_EnterState(MISSION_STATE_S6_FINAL_PUSH, now);
-  (void)DebugUart_Logf(
-      "[S6] PRE-REVERSE DONE, FINAL PUSH rpm=%d time=%lums\r\n",
-      ROBOT_S6_FINAL_PUSH_RPM,
-      (unsigned long)ROBOT_S6_FINAL_PUSH_MS);
+  s6_final_pre_reverse_done = true;
+  MissionTask_StartS6FinalVerify(now);
 }
 
 static void MissionTask_RunS6FinalPush(uint32_t now)
@@ -5481,6 +5905,13 @@ static void MissionTask_RunS7Decision(uint32_t now)
   {
     if ((uint32_t)(now - s7_last_message_tick) >= ROBOT_S7_SILENT_TIMEOUT_MS)
     {
+      if ((mission_snapshot.state == MISSION_STATE_S7_SEARCH_RED) ||
+          (mission_snapshot.state == MISSION_STATE_S7_WAIT_SECOND_E3))
+      {
+        (void)DebugUart_Log("[S7-SILENT] RED SEARCH SILENT, SELECT51 AND SEARCH03\r\n");
+        MissionTask_SwitchS7ToBlackGreen(now);
+        return;
+      }
       s7_silent_resume_state = mission_snapshot.state;
       s7_silent_left_yaw_cdeg = MissionTask_WrapYaw(
           mission_snapshot.yaw_cdeg + (int32_t)ROBOT_YAW_LEFT_SIGN *
@@ -5634,6 +6065,7 @@ static void MissionTask_ProcessEvents(uint32_t events, uint32_t now)
   {
     s7_target_switch_enabled = false;
     s3_target_select_command = MAIXCAM_COMMAND_SELECT_GREEN;
+    s4_post22_search_active = false;
     mission_snapshot.fault_flags = MISSION_FAULT_NONE;
     MissionTask_SetS1Phase(MISSION_S1_IDLE, now);
     MissionTask_ResetVisionPid();
@@ -5694,6 +6126,7 @@ static void MissionTask_CheckRunningHealth(uint32_t now)
       (mission_snapshot.state != MISSION_STATE_S6_OBSTACLE_FACE_SAFE) &&
       (mission_snapshot.state != MISSION_STATE_S6_TRACK_TIMEOUT_REVERSE) &&
       (mission_snapshot.state != MISSION_STATE_S6_FINAL_ALIGN) &&
+      (mission_snapshot.state != MISSION_STATE_S6_FINAL_VERIFY) &&
       (mission_snapshot.state != MISSION_STATE_S6_RAISE_FRAME) &&
       (mission_snapshot.state != MISSION_STATE_S6_PRE_PUSH_REVERSE) &&
       (mission_snapshot.state != MISSION_STATE_S6_FINAL_PUSH) &&
@@ -5828,9 +6261,10 @@ static void MissionTask_DebugVisionAge(uint32_t now)
       mission_snapshot.vision_target_valid ? 1U : 0U, reason,
       (int)commanded_left_rpm, (int)commanded_right_rpm);
   if (s6_pre_reposition_decision_pending || s6_align26_pending)
-    (void)DebugUart_Logf("[S6-PRE] x_frames=%u/%u span_ms=%lu pending_decision=%u pending26=%u\r\n",
-        (unsigned int)s6_x_align_frames, (unsigned int)ROBOT_S6_X_ALIGN_MIN_FRAMES,
-        (unsigned long)(s6_x_align_frames ? s6_x_align_last_tick - s6_x_align_first_tick : 0U),
+    (void)DebugUart_Logf("[S6-PRE] side_frames=%u/%u span_ms=%lu final_frames=%u pending_decision=%u pending26=%u\r\n",
+        (unsigned int)s6_side_x_align_frames, (unsigned int)ROBOT_S6_X_ALIGN_MIN_FRAMES,
+        (unsigned long)(s6_side_x_align_frames ? s6_x_align_last_tick - s6_side_x_align_first_tick : 0U),
+        (unsigned int)s6_x_align_frames,
         s6_pre_reposition_decision_pending ? 1U : 0U, s6_align26_pending ? 1U : 0U);
 }
 
@@ -5847,13 +6281,25 @@ static void MissionTask_DebugAngles(uint32_t now, bool force)
   {
     return;
   }
-  if (!force && ((mission_snapshot.state == MISSION_STATE_WAIT_START) ||
-                 (mission_snapshot.state == MISSION_STATE_STOPPED) ||
+  if (!force && ((mission_snapshot.state == MISSION_STATE_STOPPED) ||
                  (mission_snapshot.state == MISSION_STATE_FAULT)))
   {
     return;
   }
   angle_next_debug_tick = now + ROBOT_ANGLE_DEBUG_PERIOD_MS;
+
+  if (mission_snapshot.state == MISSION_STATE_WAIT_START)
+  {
+    if (!mission_snapshot.imu_valid)
+    {
+      (void)DebugUart_Log("[YAW] WAIT_START imu=0\r\n");
+      return;
+    }
+    raw_current = MissionTask_WrapYaw(mission_snapshot.yaw_cdeg);
+    (void)DebugUart_Logf("[YAW] WAIT_START deg=%ld.%02ld imu=1\r\n",
+        (long)(raw_current / 100L), (long)(raw_current % 100L));
+    return;
+  }
 
   switch (mission_snapshot.state)
   {
@@ -5958,6 +6404,7 @@ static void MissionTask_DebugAngles(uint32_t now, bool force)
     case MISSION_STATE_S6_REPOSITION_TURN_SAFE:
     case MISSION_STATE_S6_OBSTACLE_FACE_SAFE:
     case MISSION_STATE_S6_FINAL_ALIGN:
+    case MISSION_STATE_S6_FINAL_VERIFY:
     case MISSION_STATE_S6_PRE_PUSH_REVERSE:
     case MISSION_STATE_S6_FINAL_PUSH:
     case MISSION_STATE_S6_FINAL_REVERSE:
@@ -6053,6 +6500,7 @@ void StartMissionTask(void *argument)
       MissionTask_RunS6TrackTimeoutReverse(now);
       MissionTask_RunS6ObstacleAvoidance(now);
       MissionTask_RunS6FinalAlign(now);
+      MissionTask_RunS6FinalVerify(now);
       MissionTask_RunS6RaiseFrame(now);
       MissionTask_RunS6PrePushReverse(now);
       MissionTask_RunS6FinalPush(now);
