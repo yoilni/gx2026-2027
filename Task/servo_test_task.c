@@ -71,7 +71,8 @@ void StartServoTestTask(void *argument)
   }
   /* Actuator_Init already starts CH1; frame PWM and mission tasks stay off. */
   ServoTest_SetMg90Pulse(ROBOT_MG90_TEST_PULSE_US);
-  DebugUart_Logf("[MG90 TEST] hold 40 degrees, PWM=%u us; PE12 unused\r\n",
+  DebugUart_Logf("[MG90 TEST] hold %u degrees, PWM=%u us; PE12 unused\r\n",
+                (unsigned)ROBOT_MG90_TEST_ANGLE_DEG,
                 (unsigned)ROBOT_MG90_TEST_PULSE_US);
   next_wake = osKernelGetTickCount();
 

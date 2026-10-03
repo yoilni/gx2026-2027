@@ -8,6 +8,8 @@
 #define OLED_I2C_ADDRESS 0x78U
 
 HAL_StatusTypeDef OLED_Init(I2C_HandleTypeDef *hi2c);
+/* Sends display-off without the full initialization or periodic refresh. */
+HAL_StatusTypeDef OLED_DisplayOff(I2C_HandleTypeDef *hi2c);
 HAL_StatusTypeDef OLED_Clear(void);
 HAL_StatusTypeDef OLED_WriteString(uint8_t column, uint8_t page, const char *text);
 

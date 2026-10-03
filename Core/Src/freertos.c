@@ -58,7 +58,9 @@
 #if !ROBOT_MG90_SPEED_TEST_ENABLED && !ROBOT_FRAME_DOWN_TEST_ENABLED
 static osThreadId_t motorTaskHandle;
 #endif
+#if ROBOT_OLED_ENABLED
 static osThreadId_t oledTaskHandle;
+#endif
 
 #if !ROBOT_MG90_SPEED_TEST_ENABLED && !ROBOT_FRAME_DOWN_TEST_ENABLED
 static const osThreadAttr_t motorTask_attributes = {
@@ -68,11 +70,13 @@ static const osThreadAttr_t motorTask_attributes = {
 };
 #endif
 
+#if ROBOT_OLED_ENABLED
 static const osThreadAttr_t oledTask_attributes = {
   .name = "oledTask",
   .stack_size = 256U * 4U,
   .priority = (osPriority_t)osPriorityLow,
 };
+#endif
 
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
@@ -126,9 +130,14 @@ void MX_FREERTOS_Init(void) {
 #if !ROBOT_MG90_SPEED_TEST_ENABLED && !ROBOT_FRAME_DOWN_TEST_ENABLED
   motorTaskHandle = osThreadNew(StartMotorTask, NULL, &motorTask_attributes);
 #endif
+#if ROBOT_OLED_ENABLED
   oledTaskHandle = osThreadNew(StartOledTask, NULL, &oledTask_attributes);
-  if ((defaultTaskHandle == NULL) || (oledTaskHandle == NULL) ||
-      !DebugUartTask_Create(&huart2))
+  if (oledTaskHandle == NULL)
+  {
+    Error_Handler();
+  }
+#endif
+  if ((defaultTaskHandle == NULL) || !DebugUartTask_Create(&huart2))
   {
     Error_Handler();
   }

@@ -8,6 +8,8 @@
 #include "robot_config.h"
 #include "servo_test_task.h"
 
+#include <stdio.h>
+
 #define OLED_TASK_PERIOD_TICKS 200U
 
 static uint8_t oled_ready;
@@ -350,16 +352,17 @@ static void OLED_TaskUpdate(void)
   if (ROBOT_MG90_SPEED_TEST_ENABLED != 0U)
   {
     uint16_t pulse_us = ServoTest_GetPulseUs();
+    char angle_text[17];
+    char pulse_text[18];
+    (void)snprintf(angle_text, sizeof(angle_text), "MG90:%3uD HOLD  ",
+                   (unsigned)ROBOT_MG90_TEST_ANGLE_DEG);
+    (void)snprintf(pulse_text, sizeof(pulse_text), "PWM:%4uus HOLD ",
+                   (unsigned)pulse_us);
     (void)OLED_WriteString(0U, 0U,
         HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_12) == GPIO_PIN_SET
             ? "PE12:H UNUSED   " : "PE12:L UNUSED   ");
-    (void)OLED_WriteString(0U, 2U, "MG90:40 HOLD    ");
-    (void)OLED_WriteString(0U, 4U,
-        pulse_us == 944U ? "PWM:944us 40    " :
-        pulse_us == 2500U ? "PWM:2500us 180  " :
-        pulse_us == 500U ? "PWM:500us ZERO  " :
-        pulse_us == 1400U ? "PWM:1400us A    " :
-        pulse_us == 1600U ? "PWM:1600us B    " : "PWM:1500us MID  ");
+    (void)OLED_WriteString(0U, 2U, angle_text);
+    (void)OLED_WriteString(0U, 4U, pulse_text);
     OLED_TaskShowResetReason();
     return;
   }

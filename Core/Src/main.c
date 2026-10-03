@@ -35,6 +35,7 @@
 #include "maixcam_task.h"
 #include "reset_reason.h"
 #include "actuator_task.h"
+#include "robot_config.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -132,7 +133,12 @@ int main(void)
   {
     Error_Handler();
   }
+#if ROBOT_OLED_ENABLED
   (void)OLED_TaskInit(&hi2c2);
+#else
+  /* Also blank a still-powered display when only the MCU was reset. */
+  (void)OLED_DisplayOff(&hi2c2);
+#endif
   /* M2006 motor 1 rotates at 10 rpm at the output shaft. */
   SpeedLoop_SetMotorTarget(4U, 0.0f, 1000);
   /* USER CODE END 2 */

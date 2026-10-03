@@ -75,6 +75,15 @@ static HAL_StatusTypeDef OLED_SetPosition(uint8_t column, uint8_t page)
   return OLED_SendCommand((uint8_t)(0x10U + ((column >> 4U) & 0x0FU)));
 }
 
+HAL_StatusTypeDef OLED_DisplayOff(I2C_HandleTypeDef *hi2c)
+{
+  uint8_t packet[2] = {0x00U, 0xAEU};
+
+  if (hi2c == NULL) return HAL_ERROR;
+  return HAL_I2C_Master_Transmit(hi2c, OLED_I2C_ADDRESS, packet,
+                                 sizeof(packet), OLED_I2C_TIMEOUT_MS);
+}
+
 HAL_StatusTypeDef OLED_Init(I2C_HandleTypeDef *hi2c)
 {
   static const uint8_t init_commands[] = {0xAEU, 0x20U, 0x02U, 0xB0U, 0xC8U, 0x00U,
