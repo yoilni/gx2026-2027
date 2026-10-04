@@ -142,7 +142,7 @@
 #define ROBOT_VISION_Y_KD                    0.00f
 #define ROBOT_VISION_Y_INTEGRAL_LIMIT      500.0f
 #define ROBOT_VISION_Y_MIN_FORWARD_RPM        12.0f
-#define ROBOT_VISION_03_04_MIN_FORWARD_RPM     52.0f
+#define ROBOT_VISION_03_04_MIN_FORWARD_RPM     70.0f
 #define ROBOT_VISION_Y_MAX_FORWARD_RPM       130.0f
 #define ROBOT_VISION_Y_FORWARD_SIGN             -1
 #define ROBOT_VISION_TRACK_WHEEL_MAX_RPM       130
@@ -160,10 +160,10 @@
 #define ROBOT_S4_FINAL_X_KP                       0.09f
 #define ROBOT_S4_FINAL_Y_KP                       0.30f
 #define ROBOT_S4_FINAL_MIN_TURN_RPM                3.0f
-#define ROBOT_S4_FINAL_MIN_FORWARD_RPM             8.0f
+#define ROBOT_S4_FINAL_MIN_FORWARD_RPM            50.0f
 #define ROBOT_S4_FINAL_TURN_MAX_RPM                  25
-#define ROBOT_S4_FINAL_FORWARD_MAX_RPM               55
-#define ROBOT_S4_FINAL_WHEEL_MAX_RPM                 70
+#define ROBOT_S4_FINAL_FORWARD_MAX_RPM              100
+#define ROBOT_S4_FINAL_WHEEL_MAX_RPM                100
 #define ROBOT_S4_TRACK_TIMEOUT_MS                15000U
 #define ROBOT_S4_HANDSHAKE_TIMEOUT_MS             5000U
 #define ROBOT_S4_E4_FORWARD_RPM                     80
@@ -195,6 +195,11 @@
 #define ROBOT_S4_CORNER_DIFF_EARLY_RPM               17
 #define ROBOT_S4_CORNER_DIFF_MIDDLE_RPM              21
 #define ROBOT_S4_CORNER_DIFF_LATE_RPM                25
+/* 12's left push uses a smaller curve; 02 retains the shared values above.
+   Reverse replays the same profile, so its return arc also matches. */
+#define ROBOT_S4_LEFT_DIFF_EARLY_RPM                 14
+#define ROBOT_S4_LEFT_DIFF_MIDDLE_RPM                17
+#define ROBOT_S4_LEFT_DIFF_LATE_RPM                  20
 #define ROBOT_S4_CORNER_DIFF_MIDDLE_BEGIN            0.25f
 #define ROBOT_S4_CORNER_DIFF_MIDDLE_END              0.35f
 #define ROBOT_S4_CORNER_DIFF_LATE_BEGIN              0.55f
@@ -226,9 +231,9 @@
 #define ROBOT_S4_FINAL_CENTER_MS                    350U
 #define ROBOT_S4_RED_FINAL_CENTER_MS                500U
 #define ROBOT_S4_RED_FRAME_LOWER_DELAY_MS            200U
-#define ROBOT_S4_FRAME_LOWER_SETTLE_MS           1000U
-#define ROBOT_S4_POST_LOWER_REVERSE_RPM              70
-#define ROBOT_S4_POST_LOWER_REVERSE_MS              400U
+#define ROBOT_S4_FRAME_LOWER_SETTLE_MS            300U
+#define ROBOT_S4_POST_LOWER_REVERSE_RPM             100
+#define ROBOT_S4_POST_LOWER_REVERSE_MS              280U
 #define ROBOT_S4_DEBUG_PERIOD_MS                   100U
 
 /* S5 waits for MaixCam event 06 after sending team-colour command 15/25. */
@@ -259,6 +264,9 @@
 #define ROBOT_S6_RECOVERY_LONG_FORWARD_RPM             70
 #define ROBOT_S6_RECOVERY_LONG_FORWARD_MS            2000U
 #define ROBOT_S6_RECOVERY_LONG_WHEEL_MAX_RPM           80
+/* Moving yaw hold must not inherit the 30 rpm minimum for stationary turns.
+   +/-10 rpm keeps a 70 rpm cruise within the existing 80 rpm wheel cap. */
+#define ROBOT_S6_RECOVERY_FORWARD_MAX_CORRECTION_RPM 10.0f
 #define ROBOT_S6_RECOVERY_LEFT_ANGLE_CDEG           4500L
 #define ROBOT_S6_RECOVERY_RIGHT_ANGLE_CDEG          9000L
 /* Recovery scans and safe-heading turns have independent speed limits. */
@@ -306,38 +314,47 @@
    45-degree departure heading). Left turns increase yaw; right turns decrease
    yaw. A clockwise-positive angle A maps to (360 - A) modulo 360 here.
    Sectors may cross 0 degrees.
-   Disabled casualty rows retain the existing safe-heading-relative rule.
+   Casualty sectors are safe_heading - 90 through safe_heading - 15,
+   inclusive: 90..165 for safe=180; 270..345 for safe=0. Other zone/team
+   casualty rows are symmetry-derived from zone 3 / blue, not raw-yaw rules.
+   Material sectors on that side end 30 degrees before safe_heading:
+   90..150 for safe=180; 270..330 for safe=0. Opposite-side sectors unchanged.
    Material rows outside zone 3 / blue are geometry-derived and need field checks. */
 #define ROBOT_S6_SIDE_RULE_ROWS \
-  {1U, ROBOT_TEAM_RED,  0U, 1U,  9000L, 16500L,  9000L, 1U, 1U}, \
+  {1U, ROBOT_TEAM_RED,  0U, 1U,  9000L, 15000L,  9000L, 1U, 1U}, \
   {1U, ROBOT_TEAM_RED,  0U, 1U, 19000L, 27000L, 27000L, 0U, 1U}, \
-  {1U, ROBOT_TEAM_RED,  1U, 0U,     0L,     0L,     0L, 0U, 1U}, \
+  {1U, ROBOT_TEAM_RED,  1U, 1U,  9000L, 16500L,  9000L, 1U, 1U}, \
   {1U, ROBOT_TEAM_BLUE, 0U, 1U,  1000L,  9000L,  9000L, 0U, 1U}, \
-  {1U, ROBOT_TEAM_BLUE, 0U, 1U, 27000L, 34500L, 27000L, 1U, 1U}, \
-  {1U, ROBOT_TEAM_BLUE, 1U, 0U,     0L,     0L,     0L, 0U, 1U}, \
-  {2U, ROBOT_TEAM_RED,  0U, 1U,  9000L, 16500L,  9000L, 1U, 1U}, \
+  {1U, ROBOT_TEAM_BLUE, 0U, 1U, 27000L, 33000L, 27000L, 1U, 1U}, \
+  {1U, ROBOT_TEAM_BLUE, 1U, 1U, 27000L, 34500L, 27000L, 1U, 1U}, \
+  {2U, ROBOT_TEAM_RED,  0U, 1U,  9000L, 15000L,  9000L, 1U, 1U}, \
   {2U, ROBOT_TEAM_RED,  0U, 1U, 19000L, 27000L, 27000L, 0U, 1U}, \
-  {2U, ROBOT_TEAM_RED,  1U, 0U,     0L,     0L,     0L, 0U, 1U}, \
+  {2U, ROBOT_TEAM_RED,  1U, 1U,  9000L, 16500L,  9000L, 1U, 1U}, \
   {2U, ROBOT_TEAM_BLUE, 0U, 1U,  1000L,  9000L,  9000L, 0U, 1U}, \
-  {2U, ROBOT_TEAM_BLUE, 0U, 1U, 27000L, 34500L, 27000L, 1U, 1U}, \
-  {2U, ROBOT_TEAM_BLUE, 1U, 0U,     0L,     0L,     0L, 0U, 1U}, \
+  {2U, ROBOT_TEAM_BLUE, 0U, 1U, 27000L, 33000L, 27000L, 1U, 1U}, \
+  {2U, ROBOT_TEAM_BLUE, 1U, 1U, 27000L, 34500L, 27000L, 1U, 1U}, \
   {3U, ROBOT_TEAM_RED,  0U, 1U,  1000L,  9000L,  9000L, 0U, 1U}, \
-  {3U, ROBOT_TEAM_RED,  0U, 1U, 27000L, 34500L, 27000L, 1U, 1U}, \
-  {3U, ROBOT_TEAM_RED,  1U, 0U,     0L,     0L,     0L, 0U, 1U}, \
-  {3U, ROBOT_TEAM_BLUE, 0U, 1U,  9000L, 16500L,  9000L, 1U, 1U}, \
+  {3U, ROBOT_TEAM_RED,  0U, 1U, 27000L, 33000L, 27000L, 1U, 1U}, \
+  {3U, ROBOT_TEAM_RED,  1U, 1U, 27000L, 34500L, 27000L, 1U, 1U}, \
+  {3U, ROBOT_TEAM_BLUE, 0U, 1U,  9000L, 15000L,  9000L, 1U, 1U}, \
   {3U, ROBOT_TEAM_BLUE, 0U, 1U, 19000L, 27000L, 27000L, 0U, 1U}, \
-  {3U, ROBOT_TEAM_BLUE, 1U, 1U,  9000L, 18000L,  9000L, 1U, 0U}, \
+  {3U, ROBOT_TEAM_BLUE, 1U, 1U,  9000L, 16500L,  9000L, 1U, 1U}, \
   {4U, ROBOT_TEAM_RED,  0U, 1U,  1000L,  9000L,  9000L, 0U, 1U}, \
-  {4U, ROBOT_TEAM_RED,  0U, 1U, 27000L, 34500L, 27000L, 1U, 1U}, \
-  {4U, ROBOT_TEAM_RED,  1U, 0U,     0L,     0L,     0L, 0U, 1U}, \
-  {4U, ROBOT_TEAM_BLUE, 0U, 1U,  9000L, 16500L,  9000L, 1U, 1U}, \
+  {4U, ROBOT_TEAM_RED,  0U, 1U, 27000L, 33000L, 27000L, 1U, 1U}, \
+  {4U, ROBOT_TEAM_RED,  1U, 1U, 27000L, 34500L, 27000L, 1U, 1U}, \
+  {4U, ROBOT_TEAM_BLUE, 0U, 1U,  9000L, 15000L,  9000L, 1U, 1U}, \
   {4U, ROBOT_TEAM_BLUE, 0U, 1U, 19000L, 27000L, 27000L, 0U, 1U}, \
-  {4U, ROBOT_TEAM_BLUE, 1U, 0U,     0L,     0L,     0L, 0U, 1U}
-#define ROBOT_S6_REPOSITION_FORWARD_RPM               70
-#define ROBOT_S6_REPOSITION_FORWARD_MS               700U
-#define ROBOT_S6_REPOSITION_WHEEL_MAX_RPM              80
+  {4U, ROBOT_TEAM_BLUE, 1U, 1U,  9000L, 16500L,  9000L, 1U, 1U}
+/* Side turns are faster; keep shared near-target deceleration unchanged.
+   Timed nominal travel is preserved: 70 * 700 == 100 * 490. */
+#define ROBOT_S6_REPOSITION_TURN_MAX_RPM             55.0f
+#define ROBOT_S6_REPOSITION_FORWARD_RPM              100
+#define ROBOT_S6_REPOSITION_FORWARD_MS               490U
+#define ROBOT_S6_REPOSITION_WHEEL_MAX_RPM             110
 #define ROBOT_S6_APPROACH_UNALIGNED_RPM              30
 #define ROBOT_S6_APPROACH_RPM                       70
+/* The unaligned cap and stale-coordinate fading take priority over this floor. */
+#define ROBOT_S6_APPROACH_MIN_FORWARD_RPM          32.0f
 #define ROBOT_S6_APPROACH_TURN_MAX_RPM              35
 #define ROBOT_S6_APPROACH_WHEEL_MAX_RPM             90
 #define ROBOT_S6_APPROACH_TIMEOUT_MS              15000U
@@ -345,9 +362,11 @@
 #define ROBOT_S6_TRACK_REVERSE_RPM                  100
 #define ROBOT_S6_TRACK_REVERSE_MS                   700U
 /* Event 36: move past the blocking object, then face the absolute safe heading. */
+#define ROBOT_S6_OBSTACLE_TURN_MAX_RPM             55.0f
 #define ROBOT_S6_OBSTACLE_LEFT_ANGLE_CDEG          4500L
-#define ROBOT_S6_OBSTACLE_DRIVE_RPM                 100
-#define ROBOT_S6_OBSTACLE_FORWARD_MS               500U
+/* Keep nominal travel: 100 * 500 ~= 120 * 417; round to whole milliseconds. */
+#define ROBOT_S6_OBSTACLE_DRIVE_RPM                 120
+#define ROBOT_S6_OBSTACLE_FORWARD_MS               417U
 #define ROBOT_S6_OBSTACLE_RIGHT_ANGLE_CDEG        4500L
 #define ROBOT_S6_FRAME_RAISE_SETTLE_MS              300U
 #define ROBOT_S6_PRE_PUSH_REVERSE_RPM               80
@@ -355,9 +374,21 @@
 #define ROBOT_S6_PRE_PUSH_REVERSE_MS               500U
 #define ROBOT_S6_PRE_PUSH_BRAKE_MS                 200U
 #define ROBOT_S6_PRE_PUSH_TIMEOUT_MS              1500U
+/* After 26: locate against the border with the frame down, back off, raise
+   only 30 degrees, then deliver. Motion distances are timed, not sensed. */
+#define ROBOT_S6_BORDER_LOCATE_RPM                  40
+#define ROBOT_S6_BORDER_LOCATE_WHEEL_MAX_RPM       100
+#define ROBOT_S6_BORDER_LOCATE_MS                  1000U
+#define ROBOT_S6_BORDER_LOCATE_TIMEOUT_MS          3000U
+#define ROBOT_S6_BORDER_BACKOFF_RPM                 40
+#define ROBOT_S6_BORDER_BACKOFF_WHEEL_MAX_RPM      100
+#define ROBOT_S6_BORDER_BACKOFF_MS                  300U
+#define ROBOT_S6_BORDER_BACKOFF_TIMEOUT_MS         1500U
+#define ROBOT_S6_PARTIAL_FRAME_RAISE_DEG             30U
+#define ROBOT_S6_PARTIAL_FRAME_SETTLE_MS            300U
 #define ROBOT_S6_FINAL_PUSH_RPM                     40
 #define ROBOT_S6_FINAL_PUSH_WHEEL_MAX_RPM          100
-#define ROBOT_S6_FINAL_PUSH_MS                     1000U
+#define ROBOT_S6_FINAL_PUSH_MS                      750U
 #define ROBOT_S6_FINAL_PUSH_TIMEOUT_MS             3000U
 #define ROBOT_S6_REVERSE_RPM                       100
 #define ROBOT_S6_REVERSE_WHEEL_MAX_RPM             110
@@ -369,10 +400,10 @@
 #define ROBOT_S6_EXIT_TURN_TIMEOUT_MS             9000U
 
 /* Mirrored collection-frame servo endpoints (0..280 degree command scale). */
-#define ROBOT_LEFT_FRAME_DOWN_DEG       212U
-#define ROBOT_LEFT_FRAME_UP_DEG         124U
-#define ROBOT_RIGHT_FRAME_DOWN_DEG      15U
-#define ROBOT_RIGHT_FRAME_UP_DEG        95U
+#define ROBOT_LEFT_FRAME_DOWN_DEG       204U
+#define ROBOT_LEFT_FRAME_UP_DEG         116U
+#define ROBOT_RIGHT_FRAME_DOWN_DEG      23U
+#define ROBOT_RIGHT_FRAME_UP_DEG        103U
 #define ROBOT_FRAME_SERVO_MAX_ANGLE_DEG 280U
 #define ROBOT_FRAME_SERVO_MIN_PULSE_US  500U
 #define ROBOT_FRAME_SERVO_MAX_PULSE_US 2500U

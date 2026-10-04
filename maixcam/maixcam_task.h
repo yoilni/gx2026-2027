@@ -61,6 +61,8 @@
 #define MAIXCAM_EVENT_ARRANGE_TARGET_LOST 0xE2U
 #define MAIXCAM_EVENT_SEARCH_TARGET_LOST 0xE3U
 #define MAIXCAM_EVENT_CENTER_TARGET_LOST 0xE4U
+/* First green only: repeated empty05 capture requests the E4 push path. */
+#define MAIXCAM_EVENT_LOAD_EMPTY_RECOVERY 0xE5U
 #define MAIXCAM_EVENT_NO_TARGET       0xEEU
 
 typedef struct
@@ -77,6 +79,12 @@ HAL_StatusTypeDef MaixCam_Init(UART_HandleTypeDef *huart);
 HAL_StatusTypeDef MaixCam_SendCommand(uint8_t command);
 void MaixCam_ClearObject(void);
 void MaixCam_ClearEvent(void);
+/* Clear recovery-era inputs, including11/26, without stopping UART reception.
+   A frame already being parsed is discarded on completion, not aborted. */
+void MaixCam_ClearPendingInput(void);
+/* E5 is accepted only while the mission explicitly opens the first05 window. */
+void MaixCam_SetLoadEmptyRecoveryEnabled(bool enabled);
+uint16_t MaixCam_TakeIgnoredLoadEmptyRecoveryCount(void);
 void MaixCam_UART_RxCpltCallback(UART_HandleTypeDef *huart);
 void MaixCam_UART_ErrorCallback(UART_HandleTypeDef *huart);
 bool MaixCam_GetObject(MaixCam_Object *object);

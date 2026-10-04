@@ -28,9 +28,13 @@ static volatile uint8_t maixcam_has_event;
 static volatile uint8_t maixcam_red_priority_pending;
 static volatile uint8_t maixcam_safe_align_pending;
 static volatile uint8_t maixcam_recovery_loss_filter;
+static volatile uint8_t maixcam_load_empty_recovery_enabled;
+static volatile uint16_t maixcam_ignored_load_empty_recovery_count;
+static volatile uint8_t maixcam_discard_current_frame;
 
 static void MaixCam_ResetParser(uint8_t byte)
 {
+  maixcam_discard_current_frame = 0U;
   if (byte == MAIXCAM_FRAME_HEADER_1)
   {
     maixcam_frame_buffer[0] = byte;
@@ -46,6 +50,10 @@ static void MaixCam_ResetParser(uint8_t byte)
 
 static void MaixCam_PublishFrame(void)
 {
+  if (maixcam_discard_current_frame != 0U)
+  {
+    return;
+  }
   uint16_t x_magnitude =
       (uint16_t)(((uint16_t)maixcam_frame_buffer[3] << 8U) |
                  maixcam_frame_buffer[4]);
@@ -171,9 +179,22 @@ static void MaixCam_ProcessByte(uint8_t byte)
       break;
 
     case MAIXCAM_WAIT_EVENT_TAIL_2:
-      if (byte == MAIXCAM_FRAME_TAIL_2)
+      if ((byte == MAIXCAM_FRAME_TAIL_2) &&
+          (maixcam_discard_current_frame == 0U))
       {
-        if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_NO_TARGET)
+        if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_LOAD_EMPTY_RECOVERY)
+        {
+          if (maixcam_load_empty_recovery_enabled != 0U)
+          {
+            maixcam_event_code = MAIXCAM_EVENT_LOAD_EMPTY_RECOVERY;
+            maixcam_has_event = 1U;
+          }
+          else if (maixcam_ignored_load_empty_recovery_count < UINT16_MAX)
+          {
+            ++maixcam_ignored_load_empty_recovery_count;
+          }
+        }
+        else if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_NO_TARGET)
         {
           if (maixcam_recovery_loss_filter != MAIXCAM_EVENT_NO_TARGET)
           {
@@ -266,6 +287,9 @@ HAL_StatusTypeDef MaixCam_Init(UART_HandleTypeDef *huart)
   maixcam_red_priority_pending = 0U;
   maixcam_safe_align_pending = 0U;
   maixcam_recovery_loss_filter = 0U;
+  maixcam_load_empty_recovery_enabled = 0U;
+  maixcam_ignored_load_empty_recovery_count = 0U;
+  maixcam_discard_current_frame = 0U;
   maixcam_object.update_tick = 0U;
   return HAL_UART_Receive_IT(maixcam_uart, &maixcam_rx_byte, 1U);
 }
@@ -316,6 +340,50 @@ void MaixCam_ClearEvent(void)
   }
 }
 
+void MaixCam_ClearPendingInput(void)
+{
+  uint32_t primask = __get_PRIMASK();
+
+  __disable_irq();
+  maixcam_has_object = 0U;
+  maixcam_object.object_id = 0U;
+  maixcam_object.x_error_px = 0;
+  maixcam_object.y_error_px = 0;
+  /* Preserve sequence/time for diagnostics and freshness fences. */
+  maixcam_event_code = 0U;
+  maixcam_has_event = 0U;
+  maixcam_red_priority_pending = 0U;
+  maixcam_safe_align_pending = 0U;
+  /* Keep the parser and RX interrupt armed. Do not let the remainder of a
+     pre44 frame republish stale data after this clearing boundary. */
+  maixcam_discard_current_frame =
+      maixcam_parser_state != MAIXCAM_WAIT_HEADER_1 ? 1U : 0U;
+  if (primask == 0U)
+  {
+    __enable_irq();
+  }
+}
+
+void MaixCam_SetLoadEmptyRecoveryEnabled(bool enabled)
+{
+  maixcam_load_empty_recovery_enabled = enabled ? 1U : 0U;
+}
+
+uint16_t MaixCam_TakeIgnoredLoadEmptyRecoveryCount(void)
+{
+  uint32_t primask = __get_PRIMASK();
+  uint16_t count;
+
+  __disable_irq();
+  count = maixcam_ignored_load_empty_recovery_count;
+  maixcam_ignored_load_empty_recovery_count = 0U;
+  if (primask == 0U)
+  {
+    __enable_irq();
+  }
+  return count;
+}
+
 void MaixCam_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if ((huart == NULL) || (huart != maixcam_uart))
@@ -333,6 +401,7 @@ void MaixCam_UART_ErrorCallback(UART_HandleTypeDef *huart)
   {
     maixcam_frame_index = 0U;
     maixcam_parser_state = MAIXCAM_WAIT_HEADER_1;
+    maixcam_discard_current_frame = 0U;
     (void)HAL_UART_Receive_IT(maixcam_uart, &maixcam_rx_byte, 1U);
   }
 }

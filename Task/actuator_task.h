@@ -14,6 +14,10 @@ HAL_StatusTypeDef Actuator_SetFrameRaised(void);
    endpoints and continuously holds them there. */
 HAL_StatusTypeDef Actuator_SetFrameLowered(void);
 
+/* Raises each mirrored servo from its calibrated down endpoint by the given
+   command-angle amount, clamped at its normal raised endpoint. */
+HAL_StatusTypeDef Actuator_SetFramePartiallyRaised(uint16_t lift_angle_deg);
+
 /* Restores PA5/TIM2 CH1 to the calibrated 80-degree search view. */
 HAL_StatusTypeDef Actuator_SetCameraWideView(void);
 

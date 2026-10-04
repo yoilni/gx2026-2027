@@ -81,7 +81,11 @@ typedef enum
   MISSION_STATE_S6_REPOSITION_TURN_SAFE,
   MISSION_STATE_S4_E4_GREEN_SPIN_360,
   MISSION_STATE_S4_E4_RED_SPIN_360,
-  MISSION_STATE_S6_FINAL_VERIFY /* Reserved: retain numeric state IDs. */
+  MISSION_STATE_S6_FINAL_VERIFY, /* Reserved: retain numeric state IDs. */
+  /* Append delivery steps so all existing state IDs remain unchanged. */
+  MISSION_STATE_S6_BORDER_LOCATE,
+  MISSION_STATE_S6_BORDER_BACKOFF,
+  MISSION_STATE_S6_PARTIAL_RAISE_FRAME
 } MissionState;
 
 typedef enum

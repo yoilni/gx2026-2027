@@ -130,6 +130,39 @@ HAL_StatusTypeDef Actuator_SetFrameLowered(void)
                                  ROBOT_RIGHT_FRAME_DOWN_DEG);
 }
 
+static uint16_t Actuator_PartialFrameAngle(uint16_t down_angle_deg,
+                                            uint16_t up_angle_deg,
+                                            uint16_t lift_angle_deg)
+{
+  uint16_t travel_deg;
+
+  if (up_angle_deg >= down_angle_deg)
+  {
+    travel_deg = up_angle_deg - down_angle_deg;
+    if (lift_angle_deg >= travel_deg)
+    {
+      return up_angle_deg;
+    }
+    return down_angle_deg + lift_angle_deg;
+  }
+
+  travel_deg = down_angle_deg - up_angle_deg;
+  if (lift_angle_deg >= travel_deg)
+  {
+    return up_angle_deg;
+  }
+  return down_angle_deg - lift_angle_deg;
+}
+
+HAL_StatusTypeDef Actuator_SetFramePartiallyRaised(uint16_t lift_angle_deg)
+{
+  return Actuator_SetFrameAngles(
+      Actuator_PartialFrameAngle(ROBOT_LEFT_FRAME_DOWN_DEG,
+                                  ROBOT_LEFT_FRAME_UP_DEG, lift_angle_deg),
+      Actuator_PartialFrameAngle(ROBOT_RIGHT_FRAME_DOWN_DEG,
+                                  ROBOT_RIGHT_FRAME_UP_DEG, lift_angle_deg));
+}
+
 static HAL_StatusTypeDef Actuator_SetCameraAngle(uint16_t angle_deg)
 {
   if (Actuator_TimerIsValid() == 0U)
