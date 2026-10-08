@@ -21,6 +21,7 @@
 #include "can.h"
 
 /* USER CODE BEGIN 0 */
+#include "boot_init.h"
 
 /* USER CODE END 0 */
 
@@ -49,7 +50,7 @@ void MX_CAN1_Init(void)
   hcan1.Init.AutoRetransmission = DISABLE;
   hcan1.Init.ReceiveFifoLocked = DISABLE;
   hcan1.Init.TransmitFifoPriority = DISABLE;
-  if (HAL_CAN_Init(&hcan1) != HAL_OK)
+  if (BootInit_InitCan(&hcan1, false) != HAL_OK)
   {
     Error_Handler();
   }

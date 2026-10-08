@@ -30,12 +30,13 @@
 /* USER CODE BEGIN Includes */
 #include "M2006.h"
 #include "M2006_Speed.h"
-#include "jy901s.h"
+#include "hwt101.h"
 #include "oled_task.h"
 #include "maixcam_task.h"
 #include "reset_reason.h"
 #include "actuator_task.h"
 #include "robot_config.h"
+#include "boot_init.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -80,53 +81,91 @@ int main(void)
 
   /* USER CODE BEGIN 1 */
   ResetReason_Capture();
+  BootInit_Begin();
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
+  if (HAL_Init() != HAL_OK)
+  {
+    Error_Handler();
+  }
 
   /* USER CODE BEGIN Init */
-
+  /* HSI is already running: publish progress before HSE/CAN/servo startup.
+     USART2 is configured again after the APB1 clock changes. */
+  MX_GPIO_Init();
+  MX_USART2_UART_Init();
+  BootInit_SetUartReady(true);
+  {
+    ResetReasonSnapshot snapshot;
+    if (ResetReason_GetSnapshot(&snapshot))
+    {
+      BootInit_Logf("[BOOT-EARLY] RESET flags=0x%08lX HSI, UART2=115200\r\n",
+                    (unsigned long)snapshot.raw_flags);
+    }
+  }
+  if (BootInit_CheckHalTick() != HAL_OK)
+  {
+    Error_Handler();
+  }
   /* USER CODE END Init */
 
   /* Configure the system clock */
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-
+  if (BootInit_CheckHalTick() != HAL_OK)
+  {
+    Error_Handler();
+  }
+  BootInit_SetStage("PERIPHERALS");
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
+  BootInit_SetStage("GPIO");
   MX_GPIO_Init();
+  BootInit_SetStage("ADC1");
   MX_ADC1_Init();
   MX_CAN1_Init();
+  BootInit_SetStage("TIM2");
   MX_TIM2_Init();
+  BootInit_SetStage("TIM3");
   MX_TIM3_Init();
+  BootInit_SetStage("UART4");
   MX_UART4_Init();
+  BootInit_SetStage("UART5");
   MX_UART5_Init();
+  BootInit_SetStage("USART1");
   MX_USART1_UART_Init();
+  BootInit_SetStage("USART2");
   MX_USART2_UART_Init();
+  BootInit_SetStage("USART3");
   MX_USART3_UART_Init();
+  BootInit_SetStage("USART6");
   MX_USART6_UART_Init();
+  BootInit_SetStage("I2C2");
   MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
+  BootInit_SetStage("ACTUATOR");
   if (Actuator_Init() != HAL_OK)
   {
     Error_Handler();
   }
-  if (M2006_Init(&hcan1) != HAL_OK)
+  if (BootInit_InitCan(&hcan1, true) != HAL_OK)
   {
     Error_Handler();
   }
   SpeedLoop_Init();
+  BootInit_SetStage("HWT101_RX");
   HAL_NVIC_SetPriority(UART4_IRQn, 5U, 0U);
   HAL_NVIC_EnableIRQ(UART4_IRQn);
-  if (JY901S_Init(&huart4) != HAL_OK)
+  if (HWT101_Init(&huart4) != HAL_OK)
   {
     Error_Handler();
   }
+  BootInit_SetStage("MAIXCAM_RX");
   HAL_NVIC_SetPriority(USART3_IRQn, 5U, 0U);
   HAL_NVIC_EnableIRQ(USART3_IRQn);
   if (MaixCam_Init(&huart3) != HAL_OK)
@@ -134,23 +173,37 @@ int main(void)
     Error_Handler();
   }
 #if ROBOT_OLED_ENABLED
+  BootInit_SetStage("OLED_INIT");
   (void)OLED_TaskInit(&hi2c2);
 #else
+  BootInit_SetStage("OLED_OFF");
   /* Also blank a still-powered display when only the MCU was reset. */
   (void)OLED_DisplayOff(&hi2c2);
 #endif
   /* M2006 motor 1 rotates at 10 rpm at the output shaft. */
   SpeedLoop_SetMotorTarget(4U, 0.0f, 1000);
+  BootInit_SetStage("KERNEL_INIT");
   /* USER CODE END 2 */
 
   /* Init scheduler */
-  osKernelInitialize();
+  if (osKernelInitialize() != osOK)
+  {
+    Error_Handler();
+  }
 
   /* Call init function for freertos objects (in cmsis_os2.c) */
+  BootInit_SetStage("CREATE_TASKS");
   MX_FREERTOS_Init();
 
   /* Start scheduler */
+  BootInit_SetStage("KERNEL_START");
+  BootInit_Logf("[BOOT-INIT] READY, START FREERTOS tick=%lu\r\n",
+                (unsigned long)HAL_GetTick());
+  BootInit_SetUartReady(false);
   osKernelStart();
+  /* A successful scheduler start never returns. */
+  BootInit_SetUartReady(true);
+  Error_Handler();
 
   /* We should never get here as control is now taken by the scheduler */
 
@@ -190,7 +243,7 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLN = 168;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = 4;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  if (BootInit_ConfigOscillators(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
   }
@@ -204,7 +257,7 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
+  if (BootInit_ConfigClock(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
   {
     Error_Handler();
   }
@@ -242,11 +295,14 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
-  while (1)
+  if (huart2.Instance == USART2) BootInit_SetUartReady(true);
+  SpeedLoop_EmergencyStop();
+  if ((hcan1.Instance == CAN1) && (hcan1.State == HAL_CAN_STATE_LISTENING))
   {
+    (void)set_moto_current(&hcan1, 0, 0, 0, 0);
   }
+  BootInit_FaultLoop();
   /* USER CODE END Error_Handler_Debug */
 }
 

@@ -35,6 +35,7 @@
 #include "robot_config.h"
 #include "servo_test_task.h"
 #include "motor_test_task.h"
+#include "hwt101.h"
 
 /* USER CODE END Includes */
 
@@ -55,6 +56,12 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
+static osThreadId_t hwt101TaskHandle;
+static const osThreadAttr_t hwt101Task_attributes = {
+  .name = "hwt101Task",
+  .stack_size = 256U * 4U,
+  .priority = osPriorityBelowNormal,
+};
 #if !ROBOT_MG90_SPEED_TEST_ENABLED && !ROBOT_FRAME_DOWN_TEST_ENABLED
 static osThreadId_t motorTaskHandle;
 #endif
@@ -89,6 +96,7 @@ const osThreadAttr_t defaultTask_attributes = {
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
+static void StartHwt101Task(void *argument);
 
 /* USER CODE END FunctionPrototypes */
 
@@ -141,6 +149,11 @@ void MX_FREERTOS_Init(void) {
   {
     Error_Handler();
   }
+  hwt101TaskHandle = osThreadNew(StartHwt101Task, NULL, &hwt101Task_attributes);
+  if (hwt101TaskHandle == NULL)
+  {
+    Error_Handler();
+  }
 #if ROBOT_MG90_SPEED_TEST_ENABLED
   if (!ServoTestTask_Create())
   {
@@ -175,12 +188,29 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
+#if ROBOT_FRAME_DOWN_TEST_ENABLED
+  (void)DebugUart_Logf(
+      "[FRAME TEST] HOLD %udeg ABOVE DOWN, CAMERA=%udeg; MOTOR/MISSION OFF, PE12 UNUSED\r\n",
+      (unsigned int)ROBOT_FRAME_TEST_LIFT_DEG,
+      (unsigned int)ROBOT_FRAME_TEST_CAMERA_ANGLE_DEG);
+#endif
   LED_Task(argument);
   /* USER CODE END StartDefaultTask */
 }
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
+static void StartHwt101Task(void *argument)
+{
+  (void)argument;
+  for (;;)
+  {
+    uint32_t now = HAL_GetTick();
+    HWT101_Service(now);
+    HWT101_DebugYaw(HAL_GetTick());
+    (void)osDelay(20U);
+  }
+}
 
 /* USER CODE END Application */
 

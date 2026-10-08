@@ -1,4 +1,5 @@
 #include "actuator_task.h"
+#include "boot_init.h"
 
 #include "robot_config.h"
 #include "tim.h"
@@ -69,14 +70,14 @@ HAL_StatusTypeDef Actuator_Init(void)
     return HAL_ERROR;
   }
 
-  HAL_Delay(ROBOT_CAMERA_POWERUP_SETTLE_MS);
+  BootInit_DelayMs(ROBOT_CAMERA_POWERUP_SETTLE_MS);
 
 #if ROBOT_MG90_SPEED_TEST_ENABLED
   /* Frame channels stay off during the camera-servo-only test. */
   return HAL_OK;
 #elif ROBOT_FRAME_DOWN_TEST_ENABLED
-  /* In the frame test, hold the camera test angle and lower both servos. */
-  return Actuator_SetFrameLowered();
+  /* Hold the camera angle and the mirrored test lift above fully DOWN. */
+  return Actuator_SetFramePartiallyRaised(ROBOT_FRAME_TEST_LIFT_DEG);
 #else
   /* Raise the collection frame after the camera settles so the chassis can
      cross the speed bump. State 3 lowers it before target tracking. */

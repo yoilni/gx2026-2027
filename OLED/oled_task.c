@@ -1,6 +1,7 @@
 #include "oled_task.h"
 
 #include "cmsis_os.h"
+#include "hwt101.h"
 #include "main.h"
 #include "mission_task.h"
 #include "motor_test_task.h"
@@ -13,6 +14,47 @@
 #define OLED_TASK_PERIOD_TICKS 200U
 
 static uint8_t oled_ready;
+
+static uint16_t OLED_TaskWrapYaw(int32_t yaw_cdeg)
+{
+  yaw_cdeg %= 36000L;
+  if (yaw_cdeg < 0L) yaw_cdeg += 36000L;
+  return (uint16_t)yaw_cdeg;
+}
+
+static void OLED_TaskShowYaw(void)
+{
+  HWT101_Yaw attitude;
+  MissionSnapshot snapshot;
+  uint16_t yaw_cdeg;
+  char text[17];
+
+  /* Read the receiver directly so yaw also works before PE12 starts, and
+     in actuator-only tests where the mission task is not created. */
+  if (!HWT101_GetYaw(&attitude))
+  {
+    (void)OLED_WriteString(0U, 1U, "YAW:--- NO DATA ");
+    (void)OLED_WriteString(0U, 3U, "FIELD:---       ");
+    return;
+  }
+
+  /* Match UART2's 0..359.99-degree convention without float printf. */
+  yaw_cdeg = OLED_TaskWrapYaw(attitude.yaw_cdeg);
+  (void)snprintf(text, sizeof(text), "YAW:%3ld.%02ld DEG  ",
+                 (long)(yaw_cdeg / 100L), (long)(yaw_cdeg % 100L));
+  (void)OLED_WriteString(0U, 1U, text);
+
+  if (!MissionTask_GetSnapshot(&snapshot) || !snapshot.start_zone_locked)
+  {
+    (void)OLED_WriteString(0U, 3U, "FIELD:WAIT START");
+    return;
+  }
+
+  yaw_cdeg = OLED_TaskWrapYaw(attitude.yaw_cdeg - snapshot.yaw_start_cdeg);
+  (void)snprintf(text, sizeof(text), "FIELD:%3ld.%02ld DEG",
+                 (long)(yaw_cdeg / 100L), (long)(yaw_cdeg % 100L));
+  (void)OLED_WriteString(0U, 3U, text);
+}
 
 static void OLED_TaskShowStartButton(void)
 {
@@ -203,14 +245,21 @@ static void OLED_TaskShowMission(void)
     case MISSION_STATE_S6_OBSTACLE_FACE_SAFE:
       text = "S6:FINAL ALIGN   ";
       break;
-    case MISSION_STATE_S6_OBSTACLE_TURN_LEFT:
-      text = "S6:AVOID LEFT   ";
+    case MISSION_STATE_S6_CORNER_TURN_AWAY:
+    case MISSION_STATE_S6_CORNER_FORWARD_AWAY:
+    case MISSION_STATE_S6_CORNER_TURN_SIDE:
+    case MISSION_STATE_S6_CORNER_FORWARD_SIDE:
+    case MISSION_STATE_S6_CORNER_TURN_SAFE:
+      text = "S6:CORNER EXIT  ";
+      break;
+    case MISSION_STATE_S6_OBSTACLE_TURN_OUT:
+      text = "S6:AVOID OUT    ";
       break;
     case MISSION_STATE_S6_OBSTACLE_FORWARD:
       text = "S6:AVOID FWD    ";
       break;
-    case MISSION_STATE_S6_OBSTACLE_TURN_RIGHT:
-      text = "S6:AVOID RIGHT ";
+    case MISSION_STATE_S6_OBSTACLE_TURN_BACK:
+      text = "S6:AVOID BACK   ";
       break;
     case MISSION_STATE_S6_TRACK_TIMEOUT_REVERSE:
       text = "S6:8S REVERSE   ";
@@ -349,6 +398,8 @@ static void OLED_TaskUpdate(void)
 {
   if (oled_ready == 0U) return;
 
+  OLED_TaskShowYaw();
+
   if (ROBOT_MG90_SPEED_TEST_ENABLED != 0U)
   {
     uint16_t pulse_us = ServoTest_GetPulseUs();
@@ -408,7 +459,9 @@ HAL_StatusTypeDef OLED_TaskInit(I2C_HandleTypeDef *hi2c)
 
   oled_ready = 1U;
   status = OLED_WriteString(0U, 0U, "PE12:CHECKING   ");
+  if (status == HAL_OK) status = OLED_WriteString(0U, 1U, "YAW:WAIT DATA   ");
   if (status == HAL_OK) status = OLED_WriteString(0U, 2U, "MISSION:BOOT    ");
+  if (status == HAL_OK) status = OLED_WriteString(0U, 3U, "FIELD:WAIT START");
   if (status == HAL_OK) status = OLED_WriteString(0U, 4U, "CFG:CHECKING    ");
   if (status == HAL_OK) OLED_TaskShowResetReason();
   return status;

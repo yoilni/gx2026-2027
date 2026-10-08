@@ -47,6 +47,8 @@ add_executable(${CMAKE_PROJECT_NAME}
         Task/start_button_task.h
         Task/reset_reason.c
         Task/reset_reason.h
+        Task/boot_init.c
+        Task/boot_init.h
         Task/servo_test_task.c
         Task/servo_test_task.h
         Task/motor_test_task.c
@@ -68,7 +70,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         M2006/M2006_PID.c
         M2006/M2006_Speed.c
         M2006/M2006_task.c
-        JY901S/jy901s.c
+        HWT101/hwt101.c
         OLED/oled.c
         OLED/oled_task.c
         Core/Src/led_task.c
@@ -79,6 +81,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/M2006
     ${CMAKE_CURRENT_SOURCE_DIR}/JY901S
+    ${CMAKE_CURRENT_SOURCE_DIR}/HWT101
     ${CMAKE_CURRENT_SOURCE_DIR}/OLED
     ${CMAKE_CURRENT_SOURCE_DIR}/maixcam
     ${CMAKE_CURRENT_SOURCE_DIR}/Task
