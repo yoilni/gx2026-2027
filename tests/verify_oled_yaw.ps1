@@ -22,17 +22,17 @@ $preamble = @'
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-#include "hwt101.h"
+#include "imu_task.h"
 #include "mission_task.h"
 #include "robot_config.h"
 #if ROBOT_OLED_ENABLED != 1U
 #error OLED must be enabled for this restored display
 #endif
-static HWT101_Yaw fake_attitude;
+static IMU_Yaw fake_attitude;
 static MissionSnapshot fake_snapshot;
 static bool fake_fresh, fake_mission_available;
 static char rows[8][17];
-bool HWT101_GetYaw(HWT101_Yaw *attitude) {
+bool IMU_GetYaw(IMU_Yaw *attitude) {
   if (!fake_fresh) return false;
   *attitude = fake_attitude;
   return true;

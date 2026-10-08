@@ -35,7 +35,7 @@
 #include "robot_config.h"
 #include "servo_test_task.h"
 #include "motor_test_task.h"
-#include "hwt101.h"
+#include "imu_task.h"
 
 /* USER CODE END Includes */
 
@@ -56,9 +56,9 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-static osThreadId_t hwt101TaskHandle;
-static const osThreadAttr_t hwt101Task_attributes = {
-  .name = "hwt101Task",
+static osThreadId_t imuTaskHandle;
+static const osThreadAttr_t imuTask_attributes = {
+  .name = "imuTask",
   .stack_size = 256U * 4U,
   .priority = osPriorityBelowNormal,
 };
@@ -96,7 +96,7 @@ const osThreadAttr_t defaultTask_attributes = {
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
-static void StartHwt101Task(void *argument);
+static void StartImuTask(void *argument);
 
 /* USER CODE END FunctionPrototypes */
 
@@ -149,8 +149,8 @@ void MX_FREERTOS_Init(void) {
   {
     Error_Handler();
   }
-  hwt101TaskHandle = osThreadNew(StartHwt101Task, NULL, &hwt101Task_attributes);
-  if (hwt101TaskHandle == NULL)
+  imuTaskHandle = osThreadNew(StartImuTask, NULL, &imuTask_attributes);
+  if (imuTaskHandle == NULL)
   {
     Error_Handler();
   }
@@ -200,14 +200,14 @@ void StartDefaultTask(void *argument)
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
-static void StartHwt101Task(void *argument)
+static void StartImuTask(void *argument)
 {
   (void)argument;
   for (;;)
   {
     uint32_t now = HAL_GetTick();
-    HWT101_Service(now);
-    HWT101_DebugYaw(HAL_GetTick());
+    IMU_Service(now);
+    IMU_DebugYaw(HAL_GetTick());
     (void)osDelay(20U);
   }
 }

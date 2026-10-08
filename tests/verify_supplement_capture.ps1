@@ -83,6 +83,7 @@ static unsigned stops, wide_calls, near_calls, frame_raise_calls, frame_partial_
 static unsigned turn_soft_logs, search_soft_logs;
 static uint16_t frame_lift;
 static uint8_t tx_commands[64], inject06_on_tx;
+static uint8_t inject05_result_on_tx, inject05_result_on_stop;
 static bool wide_ok, near_ok, frame_lower_ok, tx_ok, expire_on_tx;
 static uint32_t health_faults;
 static void byte(uint8_t b) {
@@ -96,12 +97,21 @@ static void coords(uint8_t id,uint16_t x,uint16_t y) {
   const uint8_t f[]={0xF1,0xF2,id,x>>8,x&255,1,y>>8,y&255,2,0x1F,0x2F};
   for(unsigned i=0;i<sizeof(f);++i) byte(f[i]);
 }
+static void review_reply(uint8_t result) {
+  rx(0x05); coords(5,0,0); rx(result);
+  if(result==0x06) rx(0x16);
+}
 HAL_StatusTypeDef MaixCam_SendCommand(uint8_t cmd) {
   if(cmd==0x03) assert(frame_lift==0);
+  if(cmd==0x05) assert(frame_lift==0 && !mission_snapshot.left_target_rpm &&
+      !mission_snapshot.right_target_rpm && maixcam_load_recheck_enabled);
   assert(tx_count<sizeof(tx_commands)); tx_commands[tx_count++]=cmd;
   if(inject06_on_tx==cmd) {
-    inject06_on_tx=0; rx(0x05);
-    coords(5,0,0); rx(0x06); rx(0x16);
+    inject06_on_tx=0; review_reply(0x06);
+  }
+  if(cmd==0x05 && inject05_result_on_tx) {
+    uint8_t result=inject05_result_on_tx; inject05_result_on_tx=0;
+    review_reply(result);
   }
   if(expire_on_tx) { expire_on_tx=false; fake_now=supplement_first_request_tick+15000U; }
   return tx_ok?HAL_OK:HAL_ERROR;
@@ -116,6 +126,10 @@ static bool DebugUart_Logf(const char *s,...) {
     assert(strlen(line)<128);
     if(strstr(line,"TURN SOFT")) ++turn_soft_logs;
     if(strstr(line,"SEARCH SOFT")) ++search_soft_logs;
+  }
+  if(strstr(line,"[SUPP] STOP")==line && inject05_result_on_stop) {
+    uint8_t result=inject05_result_on_stop; inject05_result_on_stop=0;
+    review_reply(result);
   }
   return true;
 }

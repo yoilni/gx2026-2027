@@ -164,6 +164,9 @@ static void tick(uint32_t now,bool new_frame) {
 static bool side_expected(int32_t base) {
   return (base>=13500 && base<=15700) || (base>19000 && base<=22400);
 }
+static bool casualty_side_expected(int32_t base) {
+  return (base>=9000 && base<=16500) || (base>19000 && base<=22400);
+}
 static bool corner_expected(int32_t base) {
   return (base>=9000 && base<13500) || (base>22400 && base<=27000);
 }
@@ -183,9 +186,15 @@ static void verify_ranges(void) {
         int32_t yaw=MissionTask_WrapYaw(zeroes[n]+field);
         bool side=MissionTask_S6NeedsSideReposition(yaw);
         bool corner=MissionTask_GetS6CornerHeading(yaw,&heading);
-        assert(side==(id==4 ? base>=9000 && base<=16500 : side_expected(base)));
+        assert(side==(id==4 ? casualty_side_expected(base) : side_expected(base)));
         assert(corner==corner_expected(base));
         assert(!(id!=4 && side && corner));
+        if(side) {
+          bool calibrated;
+          const MissionSideRule *rule=MissionTask_GetS6SideRule(yaw,&calibrated);
+          assert(calibrated && rule);
+          assert(rule->side_heading_cdeg==MissionTask_WrapYaw(safe-18000+(base<18000?9000:27000)));
+        }
         if(corner) assert(heading==MissionTask_WrapYaw(zeroes[n]+safe-18000+(base<18000?9000:27000)));
       }
       for(unsigned e=0;e<sizeof(edges)/sizeof(edges[0]);++e) {
@@ -193,7 +202,7 @@ static void verify_ranges(void) {
         int32_t yaw=MissionTask_WrapYaw(zeroes[n]+field);
         bool side=MissionTask_S6NeedsSideReposition(yaw);
         bool corner=MissionTask_GetS6CornerHeading(yaw,&heading);
-        assert(side==(id==4 ? base>=9000 && base<=16500 : side_expected(base)));
+        assert(side==(id==4 ? casualty_side_expected(base) : side_expected(base)));
         assert(corner==corner_expected(base));
         assert(!(id!=4 && side && corner));
       }
@@ -439,7 +448,7 @@ int main(void) {
         }
         assert(s6_reposition_forward_ms==times[i]);
       }
-      if(cargo!=4) {
+      {
         const int32_t second_angles[]={19001,20700,22400};
         const uint32_t second_times[]={409,817,1225};
         for(unsigned i=0;i<3;++i) {
@@ -488,7 +497,7 @@ int main(void) {
   // Casualty evacuation wins in the old overlapping side sector; its
   // remaining side range, corner endpoints and mapped headings are preserved.
   const int32_t casualty_edges[]={8999,9000,13499,13500,16500,16501,
-    22400,22401,27000,27001};
+    18999,19000,19001,19492,22399,22400,22401,27000,27001};
   for(unsigned z=1;z<=4;++z) for(unsigned t=0;t<2;++t) {
     int32_t safe=MissionTask_GetSafeZoneYawOffset(z,teams[t]);
     for(unsigned i=0;i<sizeof(casualty_edges)/sizeof(casualty_edges[0]);++i) {
@@ -496,17 +505,28 @@ int main(void) {
       setup(z,teams[t],4,35000,MissionTask_WrapYaw(base+safe-18000));
       track_before_angle_decision();
       MissionState expected=corner_expected(base)?MISSION_STATE_S6_CORNER_TURN_AWAY:
-        (base>=13500 && base<=16500?MISSION_STATE_S6_REPOSITION_TURN_SIDE:
+        (casualty_side_expected(base)?MISSION_STATE_S6_REPOSITION_TURN_SIDE:
          MISSION_STATE_S6_TRACK_SAFE_ZONE);
       assert(mission_snapshot.state==expected);
       if(expected==MISSION_STATE_S6_REPOSITION_TURN_SIDE)
-        assert(s6_reposition_side_yaw_cdeg==MissionTask_WrapYaw(35000+safe-9000));
+        assert(s6_reposition_side_yaw_cdeg==MissionTask_WrapYaw(35000+safe-18000+(base<18000?9000:27000)));
     }
     // Saved post36 angles must use the same casualty corner-first selector.
     setup(z,teams[t],4,35000,safe);
     s6_obstacle_side_decision_pending=true;
     s6_obstacle_decision_yaw_cdeg=MissionTask_WrapYaw(35000+10000+safe-18000);
     track_before_angle_decision();assert(mission_snapshot.state==MISSION_STATE_S6_CORNER_TURN_AWAY);
+    // The added casualty sector also applies to the saved post36 angle.
+    setup(z,teams[t],4,35000,safe);
+    s6_obstacle_side_decision_pending=true;
+    s6_obstacle_decision_yaw_cdeg=MissionTask_WrapYaw(35000+19492+safe-18000);
+    track_before_angle_decision();
+    assert(mission_snapshot.state==MISSION_STATE_S6_REPOSITION_TURN_SIDE);
+    assert(s6_reposition_side_yaw_cdeg==MissionTask_WrapYaw(35000+safe+9000));
+    // A pending26 still bypasses the new sector and enters final alignment.
+    setup(z,teams[t],4,35000,MissionTask_WrapYaw(19492+safe-18000));
+    fake_now=120;rx(0x26);tick(120,true);
+    assert(mission_snapshot.state==MISSION_STATE_S6_FINAL_ALIGN && s6_reposition_count==0);
   }
   // Post36 uses the saved field100 angle even after the robot faces safe180.
   setup(3,ROBOT_TEAM_BLUE,5,35000,18000);
@@ -597,7 +617,7 @@ int main(void) {
   MissionTask_EnterState(MISSION_STATE_STOPPED,1200);tick(1220,true);
   assert(mission_snapshot.state==MISSION_STATE_STOPPED && mission_snapshot.left_target_rpm==0);
   assert(fake_rx_arms==rx_bytes+uart_inits);
-  puts("PASS:all8 zone/team rules,shared supply/casualty corners,casualty corner-first priority and remaining side ranges,centidegree edges/wrapped zero;500ms XY tracking gate/side-return reset;both corners100rpm/2000+1200ms;ignore26 all steps/ISR exit race/old half-frame;TX05/RX05/near count/wide800ms/direct XY,no new16;no repeated corner via tracking/recovery/36;new load resets guard;fresh26 resume edge;loss countdown/IMU/timeout/stop safety;continuous UART RX");
+  puts("PASS:all8 zone/team rules,shared supply/casualty corners,casualty corner-first priority and added(190,224]/mapped(10,44] side sector with heading/distance/post36/26 priority,centidegree edges/wrapped zero;500ms XY tracking gate/side-return reset;both corners100rpm/2000+1200ms;ignore26 all steps/ISR exit race/old half-frame;TX05/RX05/near count/wide800ms/direct XY,no new16;no repeated corner via tracking/recovery/36;new load resets guard;fresh26 resume edge;loss countdown/IMU/timeout/stop safety;continuous UART RX");
 }
 '@
 $parserPath = (Join-Path $projectRoot 'maixcam/maixcam_task.c').Replace('\','/')

@@ -6,6 +6,13 @@
 #define ROBOT_BOOT_INIT_RETRY_DELAY_MS    200U
 #define ROBOT_BOOT_UART_TIMEOUT_MS       50U
 
+/* One UART4 sensor: read-only boot identification, HWT101 first, then JY.
+   Extend only with a verified HWT101 product ID from the printed version. */
+#define ROBOT_IMU_POWER_SETTLE_MS        500U
+#define ROBOT_IMU_PROBE_ATTEMPTS           3U
+#define ROBOT_IMU_PROBE_INTERVAL_MS      300U
+#define ROBOT_IMU_HWT_EXTRA_PRODUCT_ID     0U
+
 /* 1: initialize OLED and refresh status/yaw; 0: blank it without a task. */
 #define ROBOT_OLED_ENABLED 1U
 
@@ -393,12 +400,13 @@
    45-degree departure heading). Left turns increase yaw; right turns decrease
    yaw. A clockwise-positive angle A maps to (360 - A) modulo 360 here.
    Sectors may cross 0 degrees.
-   Casualty sectors are safe_heading - 90 through safe_heading - 15,
-   inclusive: 90..165 for safe=180; 270..345 for safe=0. Other zone/team
+   Casualty sectors retain safe_heading - 90 through safe_heading - 15,
+   inclusive, and add (safe_heading + 10, safe_heading + 44]:
+   [90,165] and (190,224] for safe=180; [270,345] and (10,44] for safe=0. Other zone/team
    casualty rows are symmetry-derived from zone 3 / blue, not raw-yaw rules.
    Shared corner evacuation below takes priority in overlapping casualty
-   sectors: effective ordinary casualty side motion is [135,165] for safe=180
-   and [315,345] for safe=0.
+   sectors: effective ordinary casualty side motion is [135,165] and (190,224]
+   for safe=180, and [315,345] and (10,44] for safe=0.
    Material side sectors: [135,157] and (190,224] for safe=180;
    [315,337] and (10,44] for safe=0. Adjacent corner sectors are below.
    Material rows outside zone 3 / blue are geometry-derived and need field checks. */
@@ -406,27 +414,35 @@
   {1U, ROBOT_TEAM_RED,  0U, 1U, 13500L, 15700L,  9000L, 1U, 1U}, \
   {1U, ROBOT_TEAM_RED,  0U, 1U, 19000L, 22400L, 27000L, 0U, 1U}, \
   {1U, ROBOT_TEAM_RED,  1U, 1U,  9000L, 16500L,  9000L, 1U, 1U}, \
+  {1U, ROBOT_TEAM_RED,  1U, 1U, 19000L, 22400L, 27000L, 0U, 1U}, \
   {1U, ROBOT_TEAM_BLUE, 0U, 1U,  1000L,  4400L,  9000L, 0U, 1U}, \
   {1U, ROBOT_TEAM_BLUE, 0U, 1U, 31500L, 33700L, 27000L, 1U, 1U}, \
   {1U, ROBOT_TEAM_BLUE, 1U, 1U, 27000L, 34500L, 27000L, 1U, 1U}, \
+  {1U, ROBOT_TEAM_BLUE, 1U, 1U,  1000L,  4400L,  9000L, 0U, 1U}, \
   {2U, ROBOT_TEAM_RED,  0U, 1U, 13500L, 15700L,  9000L, 1U, 1U}, \
   {2U, ROBOT_TEAM_RED,  0U, 1U, 19000L, 22400L, 27000L, 0U, 1U}, \
   {2U, ROBOT_TEAM_RED,  1U, 1U,  9000L, 16500L,  9000L, 1U, 1U}, \
+  {2U, ROBOT_TEAM_RED,  1U, 1U, 19000L, 22400L, 27000L, 0U, 1U}, \
   {2U, ROBOT_TEAM_BLUE, 0U, 1U,  1000L,  4400L,  9000L, 0U, 1U}, \
   {2U, ROBOT_TEAM_BLUE, 0U, 1U, 31500L, 33700L, 27000L, 1U, 1U}, \
   {2U, ROBOT_TEAM_BLUE, 1U, 1U, 27000L, 34500L, 27000L, 1U, 1U}, \
+  {2U, ROBOT_TEAM_BLUE, 1U, 1U,  1000L,  4400L,  9000L, 0U, 1U}, \
   {3U, ROBOT_TEAM_RED,  0U, 1U,  1000L,  4400L,  9000L, 0U, 1U}, \
   {3U, ROBOT_TEAM_RED,  0U, 1U, 31500L, 33700L, 27000L, 1U, 1U}, \
   {3U, ROBOT_TEAM_RED,  1U, 1U, 27000L, 34500L, 27000L, 1U, 1U}, \
+  {3U, ROBOT_TEAM_RED,  1U, 1U,  1000L,  4400L,  9000L, 0U, 1U}, \
   {3U, ROBOT_TEAM_BLUE, 0U, 1U, 13500L, 15700L,  9000L, 1U, 1U}, \
   {3U, ROBOT_TEAM_BLUE, 0U, 1U, 19000L, 22400L, 27000L, 0U, 1U}, \
   {3U, ROBOT_TEAM_BLUE, 1U, 1U,  9000L, 16500L,  9000L, 1U, 1U}, \
+  {3U, ROBOT_TEAM_BLUE, 1U, 1U, 19000L, 22400L, 27000L, 0U, 1U}, \
   {4U, ROBOT_TEAM_RED,  0U, 1U,  1000L,  4400L,  9000L, 0U, 1U}, \
   {4U, ROBOT_TEAM_RED,  0U, 1U, 31500L, 33700L, 27000L, 1U, 1U}, \
   {4U, ROBOT_TEAM_RED,  1U, 1U, 27000L, 34500L, 27000L, 1U, 1U}, \
+  {4U, ROBOT_TEAM_RED,  1U, 1U,  1000L,  4400L,  9000L, 0U, 1U}, \
   {4U, ROBOT_TEAM_BLUE, 0U, 1U, 13500L, 15700L,  9000L, 1U, 1U}, \
   {4U, ROBOT_TEAM_BLUE, 0U, 1U, 19000L, 22400L, 27000L, 0U, 1U}, \
-  {4U, ROBOT_TEAM_BLUE, 1U, 1U,  9000L, 16500L,  9000L, 1U, 1U}
+  {4U, ROBOT_TEAM_BLUE, 1U, 1U,  9000L, 16500L,  9000L, 1U, 1U}, \
+  {4U, ROBOT_TEAM_BLUE, 1U, 1U, 19000L, 22400L, 27000L, 0U, 1U}
 /* Supplies and casualties share corner evacuation, start-zero mapping and
    the 500ms visual tracking gate. Corner decisions precede ordinary side motion.
    Shared boundaries are excluded from evacuation:

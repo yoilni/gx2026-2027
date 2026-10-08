@@ -30,7 +30,7 @@
 /* USER CODE BEGIN Includes */
 #include "M2006.h"
 #include "M2006_Speed.h"
-#include "hwt101.h"
+#include "imu_task.h"
 #include "oled_task.h"
 #include "maixcam_task.h"
 #include "reset_reason.h"
@@ -158,10 +158,10 @@ int main(void)
     Error_Handler();
   }
   SpeedLoop_Init();
-  BootInit_SetStage("HWT101_RX");
+  BootInit_SetStage("IMU_AUTO_RX");
   HAL_NVIC_SetPriority(UART4_IRQn, 5U, 0U);
   HAL_NVIC_EnableIRQ(UART4_IRQn);
-  if (HWT101_Init(&huart4) != HAL_OK)
+  if (IMU_Init(&huart4) != HAL_OK)
   {
     Error_Handler();
   }

@@ -1,7 +1,7 @@
 #include "oled_task.h"
 
 #include "cmsis_os.h"
-#include "hwt101.h"
+#include "imu_task.h"
 #include "main.h"
 #include "mission_task.h"
 #include "motor_test_task.h"
@@ -24,14 +24,14 @@ static uint16_t OLED_TaskWrapYaw(int32_t yaw_cdeg)
 
 static void OLED_TaskShowYaw(void)
 {
-  HWT101_Yaw attitude;
+  IMU_Yaw attitude;
   MissionSnapshot snapshot;
   uint16_t yaw_cdeg;
   char text[17];
 
   /* Read the receiver directly so yaw also works before PE12 starts, and
      in actuator-only tests where the mission task is not created. */
-  if (!HWT101_GetYaw(&attitude))
+  if (!IMU_GetYaw(&attitude))
   {
     (void)OLED_WriteString(0U, 1U, "YAW:--- NO DATA ");
     (void)OLED_WriteString(0U, 3U, "FIELD:---       ");

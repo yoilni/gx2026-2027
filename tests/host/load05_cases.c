@@ -22,6 +22,7 @@ static void setup(uint8_t cmd,bool after07) {
   stops=wide_calls=near_calls=frame_raise_calls=frame_partial_calls=frame_lower_calls=tx_count=0;
   frame_lift=0; wide_ok=near_ok=frame_lower_ok=tx_ok=true; health_faults=0;
   inject06_on_tx=0; expire_on_tx=false; turn_soft_logs=search_soft_logs=0;
+  inject05_result_on_tx=inject05_result_on_stop=0;
   fake_now=100; MissionTask_EnterState(MISSION_STATE_S5_WAIT_SINGLE_GREEN,100);
   MaixCam_SetSupplementWindowEnabled(after07 && cmd==0x51);
 }
@@ -132,9 +133,127 @@ static void verify_speed_case(MissionState state,uint8_t reference,int16_t y,int
     assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
   }
 }
+static uint32_t budget_at_phase(MissionState phase) {
+  setup(0x51,true); request(); start_tracking();
+  uint32_t first=supplement_first_request_tick;
+  fake_now=first+14980U;
+  MissionTask_EnterState(phase,fake_now);
+  mission_snapshot.left_target_rpm=80; mission_snapshot.right_target_rpm=60;
+  if(phase==MISSION_STATE_S4_TRACK_FINAL_BLOCK) frame_lift=20;
+  return first;
+}
+static void assert_review_route(uint8_t result) {
+  if(result==0x06) {
+    assert(mission_snapshot.state==MISSION_STATE_S6_SEARCH_SAFE_ZONE);
+    assert(s6_carried_object_id==5 && s5_load_class_confirmed && frame_lift==0);
+    assert(!supplement_budget_started && !supplement_capture_active);
+  } else if(result==0x02) {
+    assert(mission_snapshot.state==MISSION_STATE_S5_ALIGN_FOR_ARRANGE);
+  } else {
+    assert(result==0x24 && mission_snapshot.state==MISSION_STATE_S4_RAISE_FRAME);
+    assert(s6_carried_object_id==0);
+  }
+}
+static void verify_budget_request_handshake(void) {
+  //Budget expiry can preempt03,04,24 and their recovery/capture motion.
+  const MissionState phases[]={MISSION_STATE_SUPPLEMENT_WIDE_SETTLE,
+      MISSION_STATE_SUPPLEMENT_TRACK,MISSION_STATE_SUPPLEMENT_TURN_LEFT,
+      MISSION_STATE_SUPPLEMENT_TURN_RIGHT,MISSION_STATE_S4_TRACK_CENTER,
+      MISSION_STATE_S4_WAIT_ARRANGE_READY,MISSION_STATE_S4_TRACK_FINAL_BLOCK,
+      MISSION_STATE_S4_FINAL_CENTER_OBJECT,MISSION_STATE_S4_FINAL_LOWER_FRAME};
+  for(unsigned i=0;i<sizeof(phases)/sizeof(phases[0]);++i) {
+    uint32_t first=budget_at_phase(phases[i]); unsigned before=tx_count;
+    uint8_t count=supplement_capture_count;
+    //An old partial coordinate must not survive the review transition.
+    byte(0xF1);byte(0xF2);byte(6);byte(0);
+    tick(first+15000U);
+    assert(mission_snapshot.state==MISSION_STATE_SUPPLEMENT_WAIT_RECHECK);
+    assert(tx_count==before+1 && tx_commands[before]==0x05 && frame_lift==0);
+    assert(s6_carried_object_id==6 && supplement_capture_count==count);
+    assert(supplement_first_request_tick==first && supplement_budget_exhausted);
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+    assert(!supplement_capture_active && !vision_search_forward_active);
+    byte(0);byte(1);byte(0);byte(0);byte(1);byte(0x1F);byte(0x2F);
+    coords(5,30,40);rx(0x34);rx(0xE3);rx(0x14);
+    tick(first+16000U); assert(tx_count==before+1 && !mission_snapshot.vision_target_valid);
+    assert(mission_snapshot.state==MISSION_STATE_SUPPLEMENT_WAIT_RECHECK);
+    //No matching05: a zero-ID frame and06 cannot bypass final review.
+    coords(5,0,0);rx(0x06);tick(first+16020U);
+    assert(mission_snapshot.state==MISSION_STATE_SUPPLEMENT_WAIT_RECHECK);
+    assert(tx_count==before+1);
+    fake_now=first+16040U;rx(0x05);tick(fake_now);
+    assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT);
+    tick(first+16539U);assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT);
+    final_report(5,first+16540U); assert_review_route(0x06);
+    assert(tx_count==before+1);
+  }
+  //A reply received while TX05 is completing may contain05/ID/result/16
+  //in one burst. No clearing or duplicate request after sending.
+  const uint8_t results[]={0x06,0x02,0x24};
+  for(unsigned i=0;i<sizeof(results);++i) {
+    uint32_t first=budget_at_phase(MISSION_STATE_S4_TRACK_FINAL_BLOCK);
+    unsigned before=tx_count;inject05_result_on_tx=results[i];
+    tick(first+15000U);
+    assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT);
+    assert(tx_count==before+1 && tx_commands[before]==0x05);
+    assert(!mission_snapshot.vision_target_valid && frame_lift==0);
+    uint32_t review_start=mission_snapshot.state_entry_tick;
+    //Duplicate05 must not reset this hold, erase the result or echo05.
+    fake_now=review_start+20U;rx(0x05);tick(fake_now);
+    assert(mission_snapshot.state_entry_tick==review_start && tx_count==before+1);
+    tick(review_start+499U);assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT);
+    tick(review_start+500U);assert_review_route(results[i]);
+    if(results[i]==0x06) {
+      uint8_t event;assert(MaixCam_PeekEvent(&event) && event==0x16);
+    }
+    assert(tx_count==before+1);
+  }
+  //An unsolicited05 + result can arrive between the budget decision and
+  //opening the result gate. Keep that window and skip redundant TX05.
+  for(unsigned i=0;i<sizeof(results);++i) {
+    uint32_t first=budget_at_phase(MISSION_STATE_S4_TRACK_FINAL_BLOCK);
+    unsigned before=tx_count;inject05_result_on_stop=results[i];
+    tick(first+15000U);
+    assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT && tx_count==before);
+    uint32_t review_start=mission_snapshot.state_entry_tick;
+    tick(review_start+500U);assert_review_route(results[i]);assert(tx_count==before);
+    if(results[i]==0x06) {
+      uint8_t event;assert(MaixCam_PeekEvent(&event) && event==0x16);
+    }
+  }
+  //MAX2 outside an existing count window also requests05 once, keeping
+  //the original session. Calling the wait entry again cannot resend it.
+  uint32_t first=budget_at_phase(MISSION_STATE_S4_TRACK_FINAL_BLOCK);
+  supplement_capture_count=2;unsigned before=tx_count;
+  MissionTask_WaitFinalLoadCheck(fake_now,"MAX2_LIMIT");
+  assert(tx_count==before+1 && tx_commands[before]==0x05);
+  MissionTask_WaitFinalLoadCheck(fake_now+20U,"BUDGET_ALREADY_USED");
+  assert(tx_count==before+1 && supplement_capture_count==2 && supplement_first_request_tick==first);
+  //The15s decision and the reply hold remain valid across tick wrapping.
+  setup(0x51,true);request();start_tracking();
+  first=UINT32_MAX-14990U;supplement_first_request_tick=first;
+  fake_now=first+14980U;MissionTask_EnterState(MISSION_STATE_S4_TRACK_FINAL_BLOCK,fake_now);
+  before=tx_count;
+  assert(!MissionTask_HandleSupplementFinish(first+14999U));
+  tick(first+15000U);assert(tx_count==before+1 && tx_commands[before]==0x05);
+  //Any TX/servo failure stops safely, never turns an assumed load into06.
+  for(unsigned failure=0;failure<3;++failure) {
+    first=budget_at_phase(MISSION_STATE_S4_TRACK_FINAL_BLOCK);before=tx_count;
+    if(failure==0) tx_ok=false;
+    if(failure==1) frame_lower_ok=false;
+    if(failure==2) near_ok=false;
+    tick(first+15000U);
+    assert(mission_snapshot.state==MISSION_STATE_FAULT && !mission_snapshot.left_target_rpm);
+    assert(mission_snapshot.fault_flags & (failure==0?MISSION_FAULT_VISION_TX:MISSION_FAULT_ACTUATOR));
+    assert(tx_count==before+(failure==0?1:0));
+    unsigned sent=tx_count;tick(first+20000U);assert(tx_count==sent);
+  }
+  puts("PASS: exhausted03/04/24 budgets TX05 once, full-frame closure/retained session, preTX and inTX05+ID+06/02/24 bursts, no postTX event clear/no AUTO06,500ms/duplicate/partial-frame/wrap and failure safety");
+}
 int main(void) {
   verify_vision_approach();
   verify_recovery_forward_lock();
+  verify_budget_request_handshake();
   //03/supplement03 slow down near the center; far and06 limits remain.
   verify_speed_case(MISSION_STATE_S3_TRACK_GREEN,0x03,-50,31);
   verify_speed_case(MISSION_STATE_S3_TRACK_GREEN,0x03,-448,150);
@@ -251,11 +370,14 @@ int main(void) {
   for(unsigned counting=0;counting<2;++counting) {
     setup(0x51,true); request(); start_tracking(); first=supplement_first_request_tick;
     if(counting) { fake_now+=20; rx(0x05); tick(fake_now); }
-    unsigned before=tx_count; tick(first+15000);
+    unsigned before=tx_count; tick(first+14999); assert(tx_count==before);
+    tick(first+15000);
     assert(supplement_budget_exhausted && !supplement_capture_active && supplement_budget_started);
     assert(mission_snapshot.state==(counting?MISSION_STATE_S6_RECHECK_WAIT_RESULT:MISSION_STATE_SUPPLEMENT_WAIT_RECHECK));
-    assert(!mission_snapshot.left_target_rpm && tx_count==before && s6_carried_object_id==6);
-    tick(first+20000); assert(mission_snapshot.state!=MISSION_STATE_S6_SEARCH_SAFE_ZONE && tx_count==before);
+    unsigned expected=before+(counting?0:1);
+    assert(!mission_snapshot.left_target_rpm && tx_count==expected && s6_carried_object_id==6);
+    if(!counting) assert(tx_commands[before]==0x05 && frame_lift==0);
+    tick(first+20000); assert(mission_snapshot.state!=MISSION_STATE_S6_SEARCH_SAFE_ZONE && tx_count==expected);
     fake_now=first+20020; rx(0x05); tick(fake_now);
     fake_now+=20; rx(0x03); tick(fake_now); assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT);
     final_report(5,first+20520); assert(mission_snapshot.state==MISSION_STATE_S6_SEARCH_SAFE_ZONE);
@@ -280,7 +402,8 @@ int main(void) {
   tick(entry+1000); assert(mission_snapshot.state==MISSION_STATE_S6_SEARCH_SAFE_ZONE);
   //A local budget expires during TX too: no trailing03 and no transport.
   setup(0x51,true); request(); expire_on_tx=true; entry=mission_snapshot.state_entry_tick; before=tx_count;
-  tick(entry+500); assert(tx_count==before+1 && mission_snapshot.state==MISSION_STATE_SUPPLEMENT_WAIT_RECHECK);
+  tick(entry+500); assert(tx_count==before+2 && tx_commands[before]==0x51 && tx_commands[before+1]==0x05);
+  assert(mission_snapshot.state==MISSION_STATE_SUPPLEMENT_WAIT_RECHECK);
   //Corner review keeps its completed marker and accumulated8s tracking count.
   setup(0x51,true); s6_corner_completed=true; s6_track_elapsed_ms=1234;
   MissionTask_EnterState(MISSION_STATE_S6_RECHECK_WAIT_ACK,100);
@@ -347,5 +470,5 @@ int main(void) {
   setup(0x51,true); rx(0x05); tick(120); MissionTask_EnterState(MISSION_STATE_STOPPED,140); tick(160);
   assert(mission_snapshot.state==MISSION_STATE_STOPPED && !mission_snapshot.left_target_rpm && !maixcam_load_recheck_enabled);
   assert(fake_rx_arms==rx_bytes+uart_inits);
-  puts("PASS:6E long-forward coordinate/16 lock, fresh/stale resume and command/safety priority; universal05 interrupts ordinary/supplement/arrangement/recovery/corner states; stop/near/retained load/no ACK; repeated05, zero-ID reports+50ms06,500ms result hold,02/24 routes; priority/freshness/partial-frame fences; budget limits WAIT review/no AUTO06; same-attempt03/no budget reset; corner guard/8s count; servo/health/stop/UART safety");
+  puts("PASS:6E long-forward coordinate/16 lock, fresh/stale resume and command/safety priority; universal05 interrupts ordinary/supplement/arrangement/recovery/corner states; stop/near/retained load/no ACK; repeated05, zero-ID reports+50ms06,500ms result hold,02/24 routes; priority/freshness/partial-frame fences; budget limits request05 ONCE/no AUTO06; same-attempt03/no budget reset; corner guard/8s count; servo/health/stop/UART safety");
 }

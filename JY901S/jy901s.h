@@ -21,6 +21,8 @@ typedef struct
 HAL_StatusTypeDef JY901S_Init(UART_HandleTypeDef *huart);
 void JY901S_UART_RxCpltCallback(UART_HandleTypeDef *huart);
 void JY901S_UART_ErrorCallback(UART_HandleTypeDef *huart);
+/* Task-context RX re-arm retry only; never re-zero or switch hardware. */
+void JY901S_Service(uint32_t now);
 bool JY901S_GetAttitude(JY901S_Attitude *attitude);
 
 #endif /* JY901S_H */

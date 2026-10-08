@@ -5,7 +5,7 @@
 #include "actuator_task.h"
 #include "cmsis_os.h"
 #include "debug_uart_task.h"
-#include "hwt101.h"
+#include "imu_task.h"
 #include "maixcam_task.h"
 #include "robot_config.h"
 #include "stm32f4xx_hal.h"
@@ -1163,7 +1163,7 @@ static void MissionTask_UpdateVisionInput(uint32_t now)
 
 static void MissionTask_UpdateInputs(uint32_t now)
 {
-  HWT101_Yaw attitude;
+  IMU_Yaw attitude;
 
   MissionTask_UpdatePe13();
   MissionTask_UpdatePe14();
@@ -1174,7 +1174,7 @@ static void MissionTask_UpdateInputs(uint32_t now)
   mission_snapshot.right_motor_online =
       MissionTask_MotorIsOnline(MISSION_RIGHT_MOTOR_INDEX, now);
 
-  mission_snapshot.imu_valid = HWT101_GetYaw(&attitude) &&
+  mission_snapshot.imu_valid = IMU_GetYaw(&attitude) &&
       ((uint32_t)(now - attitude.update_tick) <= MISSION_IMU_TIMEOUT_MS);
   if (mission_snapshot.imu_valid)
   {
@@ -5133,11 +5133,20 @@ static void MissionTask_WaitFinalLoadCheck(uint32_t now, const char *reason)
       reason, (unsigned int)supplement_capture_count,
       (unsigned long)(now - supplement_first_request_tick));
   if (mission_snapshot.state == MISSION_STATE_S6_RECHECK_WAIT_RESULT ||
+      mission_snapshot.state == MISSION_STATE_S6_RECHECK_WAIT_ACK ||
       mission_snapshot.state == MISSION_STATE_SUPPLEMENT_WAIT_RECHECK) return;
-  MaixCam_ClearPendingInput();
-  mission_snapshot.vision_target_valid = false;
+  /* Open the result gate before requesting05. A visual05 may arrive during
+     this transition or the polling TX, followed immediately by ID/06/02/24.
+     Fence only OLD coordinates: clearing the whole mailbox here could erase
+     a one-shot result that already followed the new05. Old motion events
+     cannot run in WAIT_RECHECK and the RX05 parser fences them itself. */
   MaixCam_SetLoadRecheckEnabled(true);
-  if (Actuator_SetCameraNearView() != HAL_OK)
+  (void)MaixCam_FenceObjectReference();
+  mission_snapshot.vision_target_valid = false;
+  /*24 may have partially lifted the frame when the budget expired. Close it
+     to retain the cargo, without restarting a capture or its15s budget. */
+  if (Actuator_SetFrameLowered() != HAL_OK ||
+      Actuator_SetCameraNearView() != HAL_OK)
   {
     mission_snapshot.fault_flags |= MISSION_FAULT_ACTUATOR;
     MissionTask_EnterState(MISSION_STATE_FAULT, now);
@@ -5146,6 +5155,17 @@ static void MissionTask_WaitFinalLoadCheck(uint32_t now, const char *reason)
   s5_close_view_active = true;
   s5_next_debug_tick = now;
   MissionTask_EnterState(MISSION_STATE_SUPPLEMENT_WAIT_RECHECK, now);
+  /* If an unsolicited final05 is already received, use its existing result
+     window instead of requesting another count or clearing its report. */
+  if (MissionTask_HandleLoadCheckRequest(HAL_GetTick())) return;
+  if (MaixCam_SendCommand(MAIXCAM_COMMAND_RECHECK_LOAD) != HAL_OK)
+  {
+    mission_snapshot.fault_flags |= MISSION_FAULT_VISION_TX;
+    MissionTask_EnterState(MISSION_STATE_FAULT, HAL_GetTick());
+    return;
+  }
+  /* No input clearing after TX: keep a fast05 + class/result reply intact. */
+  (void)DebugUart_Log("[SUPP] TX E1 E2 05 1E 2E; BUDGET STOP, FRAME DOWN/NEAR; WAIT RX05 + ID/06 OR02/24\r\n");
 }
 
 static void MissionTask_RunS6LoadRecheck(uint32_t now)
@@ -5163,7 +5183,7 @@ static void MissionTask_RunS6LoadRecheck(uint32_t now)
     if ((int32_t)(now - s5_next_debug_tick) >= 0)
     {
       s5_next_debug_tick = now + ROBOT_S5_DEBUG_PERIOD_MS;
-      (void)DebugUart_Log("[LOAD05] BUDGET STOP; WAIT VISUAL05 + ID/06 OR02/24, NO AUTO06\r\n");
+      (void)DebugUart_Log("[LOAD05] BUDGET STOP;05 REQUESTED, WAIT RX05 THEN ID/06 OR02/24, NO AUTO06\r\n");
     }
     return;
   }

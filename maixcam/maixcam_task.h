@@ -133,7 +133,8 @@ bool MaixCam_TakeSupplementFinishRequest(MaixCam_Object *report);
 void MaixCam_SetLoadCheckInterruptEnabled(bool enabled);
 bool MaixCam_LoadRecheckResultPending(void);
 /* Unified review mailbox: visual05 -> zero-error cargo report ->06/02/24.
-   Also used by corner return after MCU's one initial TX05 request.
+   Also used by corner return and exhausted supplement budget after MCU's
+   one initial TX05 request. The camera must accept it outside06 as well.
    Reports never become wheel targets;05/06 survive later ordinary events. */
 void MaixCam_SetLoadRecheckEnabled(bool enabled);
 bool MaixCam_TakeLoadRecheckAck(void);

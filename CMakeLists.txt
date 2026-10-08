@@ -49,6 +49,8 @@ add_executable(${CMAKE_PROJECT_NAME}
         Task/reset_reason.h
         Task/boot_init.c
         Task/boot_init.h
+        Task/imu_task.c
+        Task/imu_task.h
         Task/servo_test_task.c
         Task/servo_test_task.h
         Task/motor_test_task.c
@@ -71,6 +73,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         M2006/M2006_Speed.c
         M2006/M2006_task.c
         HWT101/hwt101.c
+        JY901S/jy901s.c
         OLED/oled.c
         OLED/oled_task.c
         Core/Src/led_task.c
