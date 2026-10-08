@@ -68,6 +68,7 @@ $stubs = @'
 static UART_HandleTypeDef uart;
 static unsigned rx_bytes, tx_count, red_switches, center_entries;
 static unsigned yaw_prints, age_prints, angle_prints;
+static char yaw_log[128], age_log[128], angle_log[128];
 static uint8_t tx_commands[64];
 static uint8_t inject_red_on_tx, inject_red_event, inject_red_frame_kind;
 static bool frame_down;
@@ -85,11 +86,11 @@ static void coords(uint8_t id) {
 }
 static bool DebugUart_Log(const char *s) { (void)s; return true; }
 static bool DebugUart_Logf(const char *s,...) {
-  char line[256]; va_list a; va_start(a,s); vsnprintf(line,sizeof(line),s,a); va_end(a);
-  if(strstr(line,"[S51-E3]")) assert(strlen(line)<128);
-  if(strstr(line,"[YAW]")) ++yaw_prints;
-  if(strstr(line,"[VDBG]")) ++age_prints;
-  if(strstr(line,"[ANGLE]")) ++angle_prints;
+  char line[256]; va_list a; va_start(a,s); int n=vsnprintf(line,sizeof(line),s,a); va_end(a);
+  assert(n>=0 && n<128); //Every exercised diagnostic must fit the UART queue slot.
+  if(strstr(line,"[YAW]")) { ++yaw_prints; strcpy(yaw_log,line); }
+  if(strstr(line,"[V]")) { ++age_prints; strcpy(age_log,line); }
+  if(strstr(line,"[ANGLE]")) { ++angle_prints; strcpy(angle_log,line); }
   return true;
 }
 static void MissionTask_StopWheels(void) {

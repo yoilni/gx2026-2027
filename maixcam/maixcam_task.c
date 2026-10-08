@@ -41,6 +41,9 @@ static volatile uint8_t maixcam_load_empty_recovery_enabled;
 static volatile uint16_t maixcam_ignored_load_empty_recovery_count;
 static volatile uint8_t maixcam_discard_current_frame;
 static volatile uint8_t maixcam_supplement_window_enabled;
+static volatile uint8_t maixcam_supplement_direct_search;
+static volatile uint16_t maixcam_ignored_supplement05_count;
+static uint8_t maixcam_skip_supplement05_frame;
 static volatile uint8_t maixcam_supplement_load_check_enabled;
 static volatile uint8_t maixcam_supplement_request_pending;
 static volatile uint8_t maixcam_supplement_load_check_pending;
@@ -85,6 +88,7 @@ static bool MaixCam_BufferE4StageEvent(uint8_t command)
 
 static void MaixCam_ResetParser(uint8_t byte)
 {
+  maixcam_skip_supplement05_frame = 0U;
   maixcam_discard_current_frame = 0U;
   maixcam_discard_object_frame = 0U;
   if (byte == MAIXCAM_FRAME_HEADER_1)
@@ -207,6 +211,13 @@ static void MaixCam_ProcessByte(uint8_t byte)
          1F here unambiguously identifies the event-frame tail. */
       if (byte == MAIXCAM_FRAME_TAIL_1)
       {
+        /* ClassID5 is also an11-byte coordinate: suppress only a confirmed
+           five-byte05, never a green target frame. Remember a skipped05
+           through a phase transition before its final byte arrives. */
+        maixcam_skip_supplement05_frame =
+            maixcam_frame_buffer[2] == MAIXCAM_EVENT_LOAD_CHECK_REQUEST &&
+            maixcam_supplement_direct_search != 0U &&
+            maixcam_load_recheck_enabled == 0U;
         maixcam_parser_state = MAIXCAM_WAIT_EVENT_TAIL_2;
       }
       else
@@ -272,6 +283,17 @@ static void MaixCam_ProcessByte(uint8_t byte)
             maixcam_frame_buffer[2] == MAIXCAM_EVENT_NO_ARRANGE_REQUIRED)))
       {
         if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_LOAD_CHECK_REQUEST &&
+            (maixcam_skip_supplement05_frame != 0U ||
+             (maixcam_supplement_direct_search != 0U &&
+              maixcam_load_recheck_enabled == 0U)))
+        {
+          /* The removed51/03 entry recount must not fence coordinates,
+             erase04/14/24, change the camera or restart a capture. An
+             explicit budget-end TX05 opens load_recheck and remains valid. */
+          if (maixcam_ignored_supplement05_count < UINT16_MAX)
+            ++maixcam_ignored_supplement05_count;
+        }
+        else if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_LOAD_CHECK_REQUEST &&
             maixcam_load_check_interrupt_enabled != 0U)
         {
           if (maixcam_load_recheck_finish_pending == 0U)
@@ -554,6 +576,9 @@ HAL_StatusTypeDef MaixCam_Init(UART_HandleTypeDef *huart)
   maixcam_discard_current_frame = 0U;
   maixcam_object.update_tick = 0U;
   maixcam_supplement_window_enabled = 0U;
+  maixcam_supplement_direct_search = 0U;
+  maixcam_ignored_supplement05_count = 0U;
+  maixcam_skip_supplement05_frame = 0U;
   maixcam_supplement_load_check_enabled = 0U;
   maixcam_supplement_request_pending = 0U;
   maixcam_supplement_load_check_pending = 0U;
@@ -877,6 +902,7 @@ void MaixCam_SetSupplementWindowEnabled(bool enabled)
   maixcam_supplement_window_enabled = enabled ? 1U : 0U;
   if (!enabled)
   {
+    maixcam_supplement_direct_search = 0U;
     maixcam_supplement_load_check_enabled = 0U;
     maixcam_supplement_request_pending = 0U;
     maixcam_supplement_load_check_pending = 0U;
@@ -890,6 +916,21 @@ void MaixCam_SetSupplementWindowEnabled(bool enabled)
 void MaixCam_SetSupplementLoadCheckEnabled(bool enabled)
 {
   maixcam_supplement_load_check_enabled = enabled ? 1U : 0U;
+}
+
+void MaixCam_SetSupplementDirectSearch(bool active)
+{
+  maixcam_supplement_direct_search = active ? 1U : 0U;
+}
+
+uint16_t MaixCam_TakeIgnoredSupplement05Count(void)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  uint16_t count = maixcam_ignored_supplement05_count;
+  maixcam_ignored_supplement05_count = 0U;
+  if (primask == 0U) __enable_irq();
+  return count;
 }
 
 bool MaixCam_TakeSupplementRequest(uint32_t *request_tick)

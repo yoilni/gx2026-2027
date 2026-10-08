@@ -29,6 +29,8 @@
 #define MAIXCAM_COMMAND_TAIL_2   0x2EU
 #define MAIXCAM_COMMAND_SIZE     5U
 
+/* One startup notification after MCU power-on/hardware reset; no ACK. */
+#define MAIXCAM_COMMAND_MCU_RESET 0xFEU
 #define MAIXCAM_COMMAND_SEARCH_TARGET 0x03U
 #define MAIXCAM_COMMAND_TRACK_CENTER_ACK 0x04U
 #define MAIXCAM_COMMAND_RECHECK_LOAD 0x05U
@@ -121,6 +123,10 @@ bool MaixCam_TakeRedPriorityRequest(void);
    and latch06 independently so later events cannot overwrite cancellation. */
 void MaixCam_SetSupplementWindowEnabled(bool enabled);
 void MaixCam_SetSupplementLoadCheckEnabled(bool enabled);
+/* Supplement03 tracks directly: ignore its removed entry05 recount without
+   touching coordinates/events. Explicit final-review windows still accept05. */
+void MaixCam_SetSupplementDirectSearch(bool active);
+uint16_t MaixCam_TakeIgnoredSupplement05Count(void);
 bool MaixCam_TakeSupplementRequest(uint32_t *request_tick);
 /* Independent05 latch: recount must not be overwritten by loss/03 events. */
 bool MaixCam_TakeSupplementLoadCheckRequest(void);

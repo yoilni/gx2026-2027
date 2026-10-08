@@ -36,9 +36,9 @@ HWT101文档列出的1003X版本及10173.1.1版本示例对应的产品编号白
 官方版本样例`55 5F 01 41 EF 89 ... SUM`的32位版本值为`0x89EF4101`；
 产品编号为`(version >> 14) & 0x1FFFF`，不能把旧版JY的VERSION/CCBW回复当成型号。
 未列入白名单的HWT101、未接PC10发送线、查询失败都会走JY兼容分支，
-所以日志里的`SELECT=JY901S`表示选择了兼容驱动，并不证明物理模块必然是JY901S。
+所以日志里的`src=JY901S`表示选择了兼容驱动，并不证明物理模块必然是JY901S。
 该分支不会发送HWT101专用置零命令。若实际HWT101落入该分支，请提供串口打印的
-`packed/product`，核对型号后再通过`ROBOT_IMU_HWT_EXTRA_PRODUCT_ID`扩展白名单；
+`ver/pid`，核对型号后再通过`ROBOT_IMU_HWT_EXTRA_PRODUCT_ID`扩展白名单；
 不能随意放宽为收到任意角度就执行HWT专用写命令。
 
 驱动每次上电只选择一次。运行中丢帧只恢复接收，不切换型号，也不重新硬件置零。
@@ -75,21 +75,22 @@ SUM为前10字节和的低8位，校验失败不更新角度或时间戳。
 `55 52`角速度及其他合法数据帧不当成Yaw。
 串口错误、断帧和噪声后自动重新寻找帧头，不在中断中打印。
 
-每750ms经现有DebugUart队列向UART2发送一条`[HWT101]`记录：
+每750ms经现有DebugUart队列向UART2发送一条`[HWT]`记录：
 
 ```text
-[IMU] PROBE 1/3 TX FF AA 27 2E 00 hal=0
-[IMU] SELECT=HWT101 hal=0 version_seen=1 packed=89EF4101 product=10173
-[HWT101] TX FF AA 76 00 00 hal=0
-[HWT101] ZERO/SAVE SENT, WAIT FRESH YAW (NO SENSOR ACK)
-[HWT101] yaw=359.50 seq=10 age=5ms version=0000
-[HWT101] state=5 NO FRESH YAW rx=1 crc_err=0 uart_err=0
+[IMU] PROBE=1/3 TX27/2E hal=0
+[IMU] src=HWT101 hal=0 seen=1 ver=89EF4101 pid=10173
+[HWT] TX 76/00/00 hal=0
+[HWT] ZERO/SAVE TX OK; NO ACK
+[HWT] yaw=359.50 q=10 age=5 ver=0000
+[HWT] s=5 NO DATA rx=1 crc=0 uart=0
 ```
 
 打印Yaw使用0～359.99°显示，内部仍为带符号角度，保持现有角度环的
 跨零算法与PE12场地零点。接收层500ms过期，比赛角度环保留150ms新鲜度保护。
 两个驱动都参与编译，但只初始化所选的一个，UART4回调由统一接口分发。
-JY901S分支每750ms打印`[IMU] source=JY901S yaw=...`。
+JY901S分支每750ms打印`[IMU] src=JY901S yaw=...`，`q`为序号，`age`为毫秒。
+其他简写见`Debug/README.md`。
 安装后先架空验证左转Yaw增长、右转Yaw减小；
 安装方向改变时不能直接假定原来的转向符号仍然正确。
 

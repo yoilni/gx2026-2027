@@ -72,13 +72,13 @@ void StartStartButtonTask(void *argument)
       if (stable_state == GPIO_PIN_SET)
       {
         armed = true;
-        (void)DebugUart_Log("[START] PE12 released\r\n");
+        (void)DebugUart_Log("[START] RELEASE\r\n");
       }
       else if (armed)
       {
         armed = false;
         MissionTask_RequestStart();
-        (void)DebugUart_Log("[START] PE12 pressed, start requested\r\n");
+        (void)DebugUart_Log("[START] PRESS\r\n");
       }
     }
 

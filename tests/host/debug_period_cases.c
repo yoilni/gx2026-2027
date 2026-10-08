@@ -33,5 +33,27 @@ static void verify_debug_period(void) {
     MissionTask_DebugAngles(start+1501,false);
     assert(angle_prints==4);
   }
-  puts("PASS:750ms periodic debug configuration and actual yaw/age/angle timer gates, wrap and immediate state-entry snapshots; motion/vision timeouts unchanged");
+  //Compact fields retain full sequence/age values and an explicit stop reason.
+  setup(3,ROBOT_TEAM_BLUE,0);
+  mission_snapshot.state=MISSION_STATE_FAULT;
+  mission_snapshot.imu_valid=true;
+  mission_snapshot.yaw_cdeg=35999;
+  mission_snapshot.yaw_start_cdeg=0;
+  mission_snapshot.target_id=5;
+  mission_snapshot.target_sequence=UINT32_MAX;
+  mission_snapshot.target_age_ms=UINT32_MAX;
+  mission_snapshot.vision_target_valid=false;
+  commanded_left_rpm=commanded_right_rpm=0;
+  yaw_next_debug_tick=vision_age_next_debug_tick=0;
+  debug_tick(0);
+  assert(strstr(yaw_log,"r=359.99 f=359.99\r\n"));
+  assert(strstr(age_log,"id=5 q=4294967295 age=4294967295 ok=0 why=FAULT w=0/0\r\n"));
+  assert(strlen(yaw_log)<64 && strlen(age_log)<96);
+  mission_snapshot.state=MISSION_STATE_S6_TRACK_SAFE_ZONE;
+  angle_next_debug_tick=0;
+  MissionTask_DebugAngles(0,true);
+  assert(strstr(angle_log,"r=359.99 z=0.00 f=359.99"));
+  assert(strstr(angle_log,"zone=3 team="));
+  assert(strlen(angle_log)<96);
+  puts("PASS:750ms debug timer gates, wrap, state-entry snapshots and compact yaw/vision/angle fields without truncation; motion/vision timeouts unchanged");
 }

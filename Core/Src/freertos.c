@@ -190,7 +190,7 @@ void StartDefaultTask(void *argument)
   /* USER CODE BEGIN StartDefaultTask */
 #if ROBOT_FRAME_DOWN_TEST_ENABLED
   (void)DebugUart_Logf(
-      "[FRAME TEST] HOLD %udeg ABOVE DOWN, CAMERA=%udeg; MOTOR/MISSION OFF, PE12 UNUSED\r\n",
+      "[TEST] FRAME lift=%u cam=%u MOTOR OFF\r\n",
       (unsigned int)ROBOT_FRAME_TEST_LIFT_DEG,
       (unsigned int)ROBOT_FRAME_TEST_CAMERA_ANGLE_DEG);
 #endif

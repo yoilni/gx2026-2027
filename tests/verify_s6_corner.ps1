@@ -100,7 +100,7 @@ static HAL_StatusTypeDef Actuator_SetCameraWideView(void) { return HAL_OK; }
 static bool DebugUart_Log(const char *line) { (void)line;return true; }
 static bool DebugUart_Logf(const char *format,...) {
   char line[512];va_list args;va_start(args,format);vsnprintf(line,sizeof(line),format,args);va_end(args);
-  if(strstr(line,"[S6-C]")==line) assert(strlen(line)<128);
+  if(strstr(line,"[CORNER]")==line) assert(strlen(line)<128);
   return true;
 }
 static void MissionTask_StopWheels(void) {

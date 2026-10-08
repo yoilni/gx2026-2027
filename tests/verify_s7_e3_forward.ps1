@@ -49,7 +49,7 @@ static bool forward_log;
 static bool DebugUart_Log(const char *s) { (void)s; return true; }
 static bool DebugUart_Logf(const char *s,...) {
   char text[256]; va_list a; va_start(a,s); vsnprintf(text,sizeof(text),s,a); va_end(a);
-  if (strstr(text,"source=07 FORWARD rpm=80 time=800ms")) forward_log=true;
+  if (strstr(text,"src=07 FWD v=80 ms=800")) forward_log=true;
   return true;
 }
 static void MissionTask_StopWheels(void) {

@@ -49,15 +49,15 @@ static const char *DebugUart_ResetReasonText(ResetReason reason)
 {
   switch (reason)
   {
-    case RESET_REASON_POWER_ON:     return "POWER_ON";
-    case RESET_REASON_BROWNOUT:     return "BROWNOUT";
-    case RESET_REASON_EXTERNAL_PIN: return "EXTERNAL_PIN";
-    case RESET_REASON_SOFTWARE:     return "SOFTWARE";
+    case RESET_REASON_POWER_ON:     return "POR";
+    case RESET_REASON_BROWNOUT:     return "BOR";
+    case RESET_REASON_EXTERNAL_PIN: return "PIN";
+    case RESET_REASON_SOFTWARE:     return "SW";
     case RESET_REASON_IWDG:         return "IWDG";
     case RESET_REASON_WWDG:         return "WWDG";
-    case RESET_REASON_LOW_POWER:    return "LOW_POWER";
+    case RESET_REASON_LOW_POWER:    return "LP";
     case RESET_REASON_UNKNOWN:
-    default:                        return "UNKNOWN";
+    default:                        return "?";
   }
 }
 
@@ -68,12 +68,12 @@ static void DebugUart_TransmitResetReason(void)
 
   if (!ResetReason_GetSnapshot(&snapshot))
   {
-    DebugUart_Transmit("[BOOT] RESET reason=NOT_CAPTURED\r\n");
+    DebugUart_Transmit("[BOOT] rst=NA\r\n");
     return;
   }
 
   (void)snprintf(text, sizeof(text),
-                 "[BOOT] RESET reason=%s flags=0x%08lX\r\n",
+                 "[BOOT] rst=%s f=%08lX\r\n",
                  DebugUart_ResetReasonText(snapshot.reason),
                  (unsigned long)snapshot.raw_flags);
   DebugUart_Transmit(text);
@@ -137,13 +137,13 @@ void StartDebugUartTask(void *argument)
   DebugUartMessage message;
 
   (void)argument;
-  DebugUart_Transmit("[BOOT] UART2 debug ready, 115200 8N1\r\n");
+  DebugUart_Transmit("[BOOT] UART2=115200 READY\r\n");
   DebugUart_TransmitResetReason();
 
   /* Some wireless UART adapters reconnect just after an MCU reset and can
      miss the first bytes, so publish one delayed boot marker as well. */
   osDelay(500U);
-  DebugUart_Transmit("[BOOT] UART2 alive 500ms after reset\r\n");
+  DebugUart_Transmit("[BOOT] ALIVE500\r\n");
   DebugUart_TransmitResetReason();
 
   for (;;)

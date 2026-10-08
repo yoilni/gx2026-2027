@@ -171,7 +171,7 @@ static void IMU_SelectDriver(bool select_hwt)
   {
     imu_source = IMU_INIT_FAILED;
     if (primask == 0U) __enable_irq();
-    (void)DebugUart_Log("[IMU] CONFLICTING SENSOR FRAMES; NO ZERO WRITE, STOP\r\n");
+    (void)DebugUart_Log("[IMU] CONFLICT STOP NO ZERO\r\n");
     return;
   }
   status = HAL_UART_AbortReceive(imu_uart);
@@ -183,11 +183,11 @@ static void IMU_SelectDriver(bool select_hwt)
       ? (select_hwt ? IMU_HWT101 : IMU_JY901S) : IMU_INIT_FAILED;
   if (primask == 0U) __enable_irq();
   imu_next_debug_tick = HAL_GetTick();
-  (void)DebugUart_Logf("[IMU] SELECT=%s hal=%u version_seen=%u packed=%08lX product=%lu\r\n",
+  (void)DebugUart_Logf("[IMU] src=%s hal=%u seen=%u ver=%08lX pid=%lu\r\n",
       select_hwt ? "HWT101" : "JY901S", (unsigned)status, version_seen ? 1U : 0U,
       (unsigned long)version, (unsigned long)((version >> 14U) & 0x1FFFFUL));
   if (!select_hwt && status == HAL_OK)
-    (void)DebugUart_Log("[IMU] HWT NOT IDENTIFIED; JY COMPAT MODE, WAIT NEW YAW; MODEL NOT PROVEN\r\n");
+    (void)DebugUart_Log("[IMU] JY COMPAT; HWT UNKNOWN\r\n");
 }
 
 void IMU_Service(uint32_t now)
@@ -223,7 +223,7 @@ void IMU_Service(uint32_t now)
   HAL_StatusTypeDef status = HAL_UART_Transmit(imu_uart, query, sizeof(query), IMU_TX_TIMEOUT_MS);
   if (status != HAL_OK) imu_query_pending = false;
   imu_next_probe_tick = HAL_GetTick() + ROBOT_IMU_PROBE_INTERVAL_MS;
-  (void)DebugUart_Logf("[IMU] PROBE %u/%u TX FF AA 27 2E 00 hal=%u\r\n",
+  (void)DebugUart_Logf("[IMU] PROBE=%u/%u TX27/2E hal=%u\r\n",
       (unsigned)imu_probe_attempts, (unsigned)ROBOT_IMU_PROBE_ATTEMPTS, (unsigned)status);
 }
 
@@ -263,12 +263,12 @@ void IMU_DebugYaw(uint32_t now)
       (imu_source == IMU_PROBING ? "PROBING" : "INIT_FAILED");
   if (!IMU_GetYaw(&sample))
   {
-    (void)DebugUart_Logf("[IMU] source=%s NO FRESH YAW; product=%lu ver_seen=%u\r\n",
+    (void)DebugUart_Logf("[IMU] src=%s NO DATA pid=%lu seen=%u\r\n",
         source, (unsigned long)((imu_packed_version >> 14U) & 0x1FFFFUL), imu_has_version ? 1U : 0U);
     return;
   }
   int32_t wrapped = sample.yaw_cdeg < 0 ? sample.yaw_cdeg + 36000L : sample.yaw_cdeg;
-  (void)DebugUart_Logf("[IMU] source=%s yaw=%ld.%02ld seq=%lu age=%lums\r\n",
+  (void)DebugUart_Logf("[IMU] src=%s yaw=%ld.%02ld q=%lu age=%lu\r\n",
       source, (long)(wrapped / 100L), (long)(wrapped % 100L),
       (unsigned long)sample.sequence, (unsigned long)(now - sample.update_tick));
 }

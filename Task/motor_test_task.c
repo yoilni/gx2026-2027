@@ -45,7 +45,7 @@ static void StartMotorTestTask(void *argument)
 
   (void)argument;
   MotorTest_Stop();
-  (void)DebugUart_Log("[MOTOR TEST] waiting for both wheel feedback\r\n");
+  (void)DebugUart_Log("[TEST] MOTOR WAIT FB\r\n");
 
   for (;;)
   {
@@ -63,14 +63,14 @@ static void StartMotorTestTask(void *argument)
         drive_started = now;
         motor_test_status = MOTOR_TEST_RUNNING;
         (void)DebugUart_Logf(
-            "[MOTOR TEST] forward %d rpm for %lu ms\r\n",
+            "[TEST] MOTOR FWD=%d/%lu\r\n",
             ROBOT_STRAIGHT_TEST_RPM, (unsigned long)ROBOT_STRAIGHT_TEST_MS);
       }
       else if ((uint32_t)(now - wait_started) >= MOTOR_TEST_FEEDBACK_WAIT_MS)
       {
         SpeedLoop_EmergencyStop();
         motor_test_status = MOTOR_TEST_FEEDBACK_FAULT;
-        (void)DebugUart_Log("[MOTOR TEST] feedback timeout, no movement\r\n");
+        (void)DebugUart_Log("[TEST] MOTOR FB TIMEOUT\r\n");
       }
     }
     else if (motor_test_status == MOTOR_TEST_RUNNING)
@@ -79,13 +79,13 @@ static void StartMotorTestTask(void *argument)
       {
         SpeedLoop_EmergencyStop();
         motor_test_status = MOTOR_TEST_FEEDBACK_FAULT;
-        (void)DebugUart_Log("[MOTOR TEST] feedback lost, stopped early\r\n");
+        (void)DebugUart_Log("[TEST] MOTOR FB LOST STOP\r\n");
       }
       else if ((uint32_t)(now - drive_started) >= ROBOT_STRAIGHT_TEST_MS)
       {
         MotorTest_Stop();
         motor_test_status = MOTOR_TEST_DONE;
-        (void)DebugUart_Log("[MOTOR TEST] one-second run complete, stopped\r\n");
+        (void)DebugUart_Log("[TEST] MOTOR DONE STOP\r\n");
       }
     }
 

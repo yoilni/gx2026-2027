@@ -102,7 +102,7 @@ int main(void)
     ResetReasonSnapshot snapshot;
     if (ResetReason_GetSnapshot(&snapshot))
     {
-      BootInit_Logf("[BOOT-EARLY] RESET flags=0x%08lX HSI, UART2=115200\r\n",
+      BootInit_Logf("[BOOT] rst=%08lX HSI UART2=115200\r\n",
                     (unsigned long)snapshot.raw_flags);
     }
   }
@@ -172,6 +172,13 @@ int main(void)
   {
     Error_Handler();
   }
+  BootInit_SetStage("MAIXCAM_RESET_TX");
+  {
+    /* main runs once per MCU boot, before any mission command can be sent.
+       Keep a failed notification bounded; no retry or camera ACK wait. */
+    HAL_StatusTypeDef status = MaixCam_SendCommand(MAIXCAM_COMMAND_MCU_RESET);
+    BootInit_Logf("[BOOT] TXFE hal=%u\r\n", (unsigned int)status);
+  }
 #if ROBOT_OLED_ENABLED
   BootInit_SetStage("OLED_INIT");
   (void)OLED_TaskInit(&hi2c2);
@@ -197,7 +204,7 @@ int main(void)
 
   /* Start scheduler */
   BootInit_SetStage("KERNEL_START");
-  BootInit_Logf("[BOOT-INIT] READY, START FREERTOS tick=%lu\r\n",
+  BootInit_Logf("[BOOT] RTOS ms=%lu\r\n",
                 (unsigned long)HAL_GetTick());
   BootInit_SetUartReady(false);
   osKernelStart();

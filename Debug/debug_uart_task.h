@@ -12,7 +12,7 @@ bool DebugUartTask_Create(UART_HandleTypeDef *huart);
 bool DebugUart_Log(const char *text);
 
 /* Task-context formatted enqueue. Keep high-rate control loops free of logs;
-   mission telemetry currently calls this at 10 Hz. */
+   periodic mission telemetry uses a 750 ms interval. */
 bool DebugUart_Logf(const char *format, ...);
 
 void StartDebugUartTask(void *argument);

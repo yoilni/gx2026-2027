@@ -120,9 +120,9 @@ static bool DebugUart_Log(const char *s) { (void)s; return true; }
 static bool DebugUart_Logf(const char *s,...) {
   char line[512]; va_list a; va_start(a,s); vsnprintf(line,sizeof(line),s,a); va_end(a);
   if(strstr(line,"[SUPP]")) assert(strlen(line)<128);
-  if(strstr(line,"[S6-CHECK]")) assert(strlen(line)<128);
+  if(strstr(line,"[CHECK05]")) assert(strlen(line)<128);
   if(strstr(line,"[LOAD05]")) assert(strlen(line)<128);
-  if(strstr(line,"[S6-TMO]")) {
+  if(strstr(line,"[6E-TMO]")) {
     assert(strlen(line)<128);
     if(strstr(line,"TURN SOFT")) ++turn_soft_logs;
     if(strstr(line,"SEARCH SOFT")) ++search_soft_logs;
@@ -153,6 +153,9 @@ static HAL_StatusTypeDef Actuator_SetFramePartiallyRaised(uint16_t lift) { ++fra
 static void MissionTask_EnterState(MissionState state,uint32_t now) {
   if(mission_snapshot.state==state) return;
   mission_snapshot.state=state; mission_snapshot.state_entry_tick=now;
+  MaixCam_SetSupplementDirectSearch(supplement_capture_active && !supplement_budget_exhausted &&
+      (state==MISSION_STATE_SUPPLEMENT_WIDE_SETTLE || state==MISSION_STATE_SUPPLEMENT_TRACK ||
+       state==MISSION_STATE_SUPPLEMENT_TURN_LEFT || state==MISSION_STATE_SUPPLEMENT_TURN_RIGHT));
   MaixCam_SetLoadCheckInterruptEnabled(MissionTask_CanPauseForLoadCheck());
   MaixCam_SetLoadEmptyRecoveryEnabled((state==MISSION_STATE_S5_WAIT_SINGLE_GREEN ||
       state==MISSION_STATE_S6_RECHECK_WAIT_RESULT) && !s5_recheck_resume_safe_tracking &&

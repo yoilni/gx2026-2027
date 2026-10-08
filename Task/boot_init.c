@@ -46,7 +46,7 @@ void BootInit_SetStage(const char *stage)
   boot_stage = stage;
   boot_attempt = 0U;
   boot_last_status = HAL_OK;
-  BootInit_Logf("[BOOT-INIT] BEGIN %s tick=%lu\r\n", stage,
+  BootInit_Logf("[BOOT] %s ms=%lu\r\n", stage,
                 (unsigned long)HAL_GetTick());
 }
 
@@ -107,7 +107,7 @@ HAL_StatusTypeDef BootInit_CheckHalTick(void)
 
   BootInit_DelayMs(20U);
   elapsed = (uint32_t)(HAL_GetTick() - start);
-  BootInit_Logf("[BOOT-INIT] HAL_TICK delta=%lu expected=20ms\r\n",
+  BootInit_Logf("[BOOT] tick=%lu/20\r\n",
                 (unsigned long)elapsed);
   if ((elapsed < 10U) || (elapsed > 40U))
   {
@@ -132,7 +132,7 @@ HAL_StatusTypeDef BootInit_Run(const char *stage, BootInitAttempt function,
   for (uint32_t attempt = 1U; attempt <= ROBOT_BOOT_INIT_MAX_ATTEMPTS; ++attempt)
   {
     boot_attempt = attempt;
-    BootInit_Logf("[BOOT-INIT] %s attempt=%lu/%lu\r\n", stage,
+    BootInit_Logf("[BOOT] %s try=%lu/%lu\r\n", stage,
                   (unsigned long)attempt,
                   (unsigned long)ROBOT_BOOT_INIT_MAX_ATTEMPTS);
     /* HAL clock/CAN timeouts rely on TIM4; a stopped tick is a fault, not
@@ -140,7 +140,7 @@ HAL_StatusTypeDef BootInit_Run(const char *stage, BootInitAttempt function,
     if (BootInit_CheckHalTick() != HAL_OK) return HAL_TIMEOUT;
     status = function(context, attempt);
     boot_last_status = status;
-    BootInit_Logf("[BOOT-INIT] %s result=%u tick=%lu\r\n", stage,
+    BootInit_Logf("[BOOT] %s hal=%u ms=%lu\r\n", stage,
                   (unsigned int)status, (unsigned long)HAL_GetTick());
     if (status == HAL_OK) return HAL_OK;
     if (attempt < ROBOT_BOOT_INIT_MAX_ATTEMPTS)
@@ -234,7 +234,7 @@ void BootInit_FaultLoop(void)
   if (boot_last_status == HAL_OK) boot_last_status = HAL_ERROR;
   for (;;)
   {
-    BootInit_Logf("[BOOT-FAULT] stage=%s attempt=%lu hal=%u; STOPPED, RESET REQUIRED\r\n",
+    BootInit_Logf("[BOOT-FAULT] %s try=%lu hal=%u STOP\r\n",
                   boot_stage, (unsigned long)boot_attempt,
                   (unsigned int)boot_last_status);
     for (uint32_t pulse = 0U; pulse < 3U; ++pulse)

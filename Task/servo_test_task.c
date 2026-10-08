@@ -42,7 +42,7 @@ static void ServoTest_SetMg90Pulse(uint16_t pulse_us)
   if (servo_test_pulse_us != pulse_us)
   {
     servo_test_pulse_us = pulse_us;
-    DebugUart_Logf("[MG90 TEST] PWM=%u us\r\n", (unsigned)pulse_us);
+    DebugUart_Logf("[TEST] MG90 pwm=%u\r\n", (unsigned)pulse_us);
   }
 }
 
@@ -65,13 +65,13 @@ void StartServoTestTask(void *argument)
   (void)argument;
   if (!ServoTest_TimerConfigurationIsSafe())
   {
-    DebugUart_Logf("[MG90 TEST] invalid TIM2 configuration\r\n");
+    DebugUart_Logf("[TEST] MG90 TIM2 ERR\r\n");
     osThreadExit();
     return;
   }
   /* Actuator_Init already starts CH1; frame PWM and mission tasks stay off. */
   ServoTest_SetMg90Pulse(ROBOT_MG90_TEST_PULSE_US);
-  DebugUart_Logf("[MG90 TEST] hold %u degrees, PWM=%u us; PE12 unused\r\n",
+  DebugUart_Logf("[TEST] MG90 angle=%u pwm=%u\r\n",
                 (unsigned)ROBOT_MG90_TEST_ANGLE_DEG,
                 (unsigned)ROBOT_MG90_TEST_PULSE_US);
   next_wake = osKernelGetTickCount();
