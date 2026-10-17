@@ -253,14 +253,17 @@ static void verify_corner_route(uint8_t zone,uint8_t team,uint8_t cargo,int32_t 
   tick(5000,false);assert(!mission_snapshot.vision_target_valid); // cached maneuver coordinates were cleared
   fake_now=5020;rx(0x05);cargo_report(cargo);rx(0x06);rx(0x26);
   tick(5020,true);assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT);
-  tick(5519,true);assert(!mission_snapshot.left_target_rpm && !mission_snapshot.vision_target_valid);
-  tick(5520,false);assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WIDE_SETTLE);
+  tick(5020U+ROBOT_S6_RECHECK_CAMERA_SETTLE_MS-1U,true);
+  assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT && !mission_snapshot.left_target_rpm && !mission_snapshot.vision_target_valid);
+  tick(5020U+ROBOT_S6_RECHECK_CAMERA_SETTLE_MS,false);
+  assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WIDE_SETTLE);
   assert(s6_carried_object_id==cargo && tx_calls==1 && s5_load_class_confirmed);
-  tick(6300,true);assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
-  tick(6319,false);assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WIDE_SETTLE);
-  tick(6320,false);assert(mission_snapshot.state==MISSION_STATE_S6_TRACK_SAFE_ZONE && s6_corner_completed);
+  uint32_t wide_done=5020U+ROBOT_S6_RECHECK_CAMERA_SETTLE_MS+ROBOT_S6_RECHECK_WIDE_SETTLE_MS;
+  tick(wide_done-20U,true);assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+  tick(wide_done-1U,false);assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WIDE_SETTLE);
+  tick(wide_done,false);assert(mission_snapshot.state==MISSION_STATE_S6_TRACK_SAFE_ZONE && s6_corner_completed);
   assert(s6_pre_reposition_track_elapsed_ms==0 && s6_pre_reposition_decision_pending);
-  tick(6340,true);assert(mission_snapshot.vision_target_valid);
+  tick(wide_done+20U,true);assert(mission_snapshot.vision_target_valid);
   assert(mission_snapshot.left_target_rpm!=0); // new frames restart XY PID
   //Even if tracking revisits the same angle, do not repeat this load's corner.
   mission_snapshot.yaw_cdeg=MissionTask_WrapYaw(35000+field);
@@ -384,7 +387,23 @@ static void verify_heading_turn_timeout(void) {
 int main(void) {
   verify_yaw_deadbands();
   verify_heading_turn_timeout();
-  assert(ROBOT_S6_PRE_REPOSITION_TRACK_MS==500);
+  assert(ROBOT_S6_PRE_REPOSITION_TRACK_MS==1000);
+  assert(ROBOT_S6_RECOVERY_SCAN_MAX_RPM==20 && ROBOT_S6_RECOVERY_SCAN_MIN_RPM==20);
+  // Both6E sweep directions use20rpm; reaching the heading adds no wait.
+  const MissionState recovery_scan_states[]={MISSION_STATE_S6_RECOVERY_TURN_LEFT,
+                                             MISSION_STATE_S6_RECOVERY_TURN_BACK};
+  for(unsigned i=0;i<2;++i) {
+    setup(3,ROBOT_TEAM_BLUE,5,35000,18000);
+    MissionTask_EnterState(recovery_scan_states[i],120);
+    MissionTask_ResetS6ControllerState();
+    int32_t scan_goal=MissionTask_WrapYaw(mission_snapshot.yaw_cdeg+(i?-9000:4500));
+    assert(!MissionTask_RunS6TurnToHeading(140,scan_goal));
+    assert(mission_snapshot.left_target_rpm==(i?20:-20) &&
+           mission_snapshot.right_target_rpm==-mission_snapshot.left_target_rpm);
+    mission_snapshot.yaw_cdeg=scan_goal;
+    assert(MissionTask_RunS6TurnToHeading(160,scan_goal));
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+  }
   assert(MISSION_STATE_SUPPLEMENT_CENTER_OBJECT==85 && MISSION_STATE_S6_CORNER_TURN_AWAY==86);
   assert(ROBOT_S6_CORNER_FORWARD_RPM==100 && ROBOT_S6_CORNER_AWAY_FORWARD_MS==2000 && ROBOT_S6_CORNER_SIDE_FORWARD_MS==1200);
   assert(ROBOT_S6_REPOSITION_FORWARD_RPM==120 && ROBOT_S6_CORNER_WHEEL_MAX_RPM==110);
@@ -533,21 +552,32 @@ int main(void) {
   s6_obstacle_side_decision_pending=true;s6_obstacle_decision_yaw_cdeg=MissionTask_WrapYaw(35000+10000);
   track_before_angle_decision();assert(mission_snapshot.state==MISSION_STATE_S6_CORNER_TURN_AWAY);
   assert(s6_corner_side_yaw_cdeg==MissionTask_WrapYaw(35000+9000));
-  // Each side-return restarts the full500ms interval, not the old elapsed time.
+  // Each side-return restarts the full1000ms interval, not the old elapsed time.
   setup(3,ROBOT_TEAM_BLUE,5,35000,13500);track_before_angle_decision();
   assert(mission_snapshot.state==MISSION_STATE_S6_REPOSITION_TURN_SIDE);
-  MissionTask_StartS6VisionApproach(700);
+  const uint32_t side_restart=120+ROBOT_S6_PRE_REPOSITION_TRACK_MS+80;
+  MissionTask_StartS6VisionApproach(side_restart);
   assert(!s6_pre_reposition_track_elapsed_ms && s6_pre_reposition_decision_pending);
-  tick(720,true);tick(1219,true);
-  assert(mission_snapshot.state==MISSION_STATE_S6_TRACK_SAFE_ZONE && s6_pre_reposition_track_elapsed_ms==499);
-  tick(1220,true);assert(mission_snapshot.state==MISSION_STATE_S6_REPOSITION_TURN_SIDE);
-  // A brief missing frame pauses, but does not clear the accumulated500ms gate.
+  const uint32_t side_new_coords=side_restart+20;
+  tick(side_new_coords,true);
+  for(uint32_t now=side_new_coords+200;now<side_new_coords+ROBOT_S6_PRE_REPOSITION_TRACK_MS;now+=200)
+    tick(now,true);
+  tick(side_new_coords+ROBOT_S6_PRE_REPOSITION_TRACK_MS-1,true);
+  assert(mission_snapshot.state==MISSION_STATE_S6_TRACK_SAFE_ZONE &&
+         s6_pre_reposition_track_elapsed_ms==ROBOT_S6_PRE_REPOSITION_TRACK_MS-1);
+  tick(side_new_coords+ROBOT_S6_PRE_REPOSITION_TRACK_MS,true);
+  assert(mission_snapshot.state==MISSION_STATE_S6_REPOSITION_TURN_SIDE);
+  // A brief missing frame pauses, but does not clear the accumulated1000ms gate.
   setup(3,ROBOT_TEAM_BLUE,5,35000,10000);tick(120,true);tick(520,true);
   assert(s6_pre_reposition_track_elapsed_ms==400);
   fake_now=540;MaixCam_ClearObject();tick(540,false);tick(560,true);
   assert(s6_pre_reposition_track_elapsed_ms==400);
-  tick(659,true);assert(mission_snapshot.state==MISSION_STATE_S6_TRACK_SAFE_ZONE && s6_pre_reposition_track_elapsed_ms==499);
-  tick(660,true);assert(mission_snapshot.state==MISSION_STATE_S6_CORNER_TURN_AWAY);
+  tick(960,true);assert(s6_pre_reposition_track_elapsed_ms==800);
+  const uint32_t paused_decision=560+ROBOT_S6_PRE_REPOSITION_TRACK_MS-400;
+  tick(paused_decision-1,true);
+  assert(mission_snapshot.state==MISSION_STATE_S6_TRACK_SAFE_ZONE &&
+         s6_pre_reposition_track_elapsed_ms==ROBOT_S6_PRE_REPOSITION_TRACK_MS-1);
+  tick(paused_decision,true);assert(mission_snapshot.state==MISSION_STATE_S6_CORNER_TURN_AWAY);
   // Every corner step ignores26 without latching or postponing delivery.
   for(unsigned state=MISSION_STATE_S6_CORNER_TURN_AWAY;state<=MISSION_STATE_S6_CORNER_TURN_SAFE;++state) {
     setup(3,ROBOT_TEAM_BLUE,5,35000,10000);
@@ -617,7 +647,7 @@ int main(void) {
   MissionTask_EnterState(MISSION_STATE_STOPPED,1200);tick(1220,true);
   assert(mission_snapshot.state==MISSION_STATE_STOPPED && mission_snapshot.left_target_rpm==0);
   assert(fake_rx_arms==rx_bytes+uart_inits);
-  puts("PASS:all8 zone/team rules,shared supply/casualty corners,casualty corner-first priority and added(190,224]/mapped(10,44] side sector with heading/distance/post36/26 priority,centidegree edges/wrapped zero;500ms XY tracking gate/side-return reset;both corners100rpm/2000+1200ms;ignore26 all steps/ISR exit race/old half-frame;TX05/RX05/near count/wide800ms/direct XY,no new16;no repeated corner via tracking/recovery/36;new load resets guard;fresh26 resume edge;loss countdown/IMU/timeout/stop safety;continuous UART RX");
+  puts("PASS:all8 zone/team rules,shared supply/casualty corners,casualty corner-first priority and added(190,224]/mapped(10,44] side sector with heading/distance/post36/26 priority,centidegree edges/wrapped zero;1000ms XY tracking gate/side-return reset;both corners100rpm/2000+1200ms;ignore26 all steps/ISR exit race/old half-frame;TX05/RX05/near count/wide800ms/direct XY,no new16;no repeated corner via tracking/recovery/36;new load resets guard;fresh26 resume edge;loss countdown/IMU/timeout/stop safety;continuous UART RX");
 }
 '@
 $parserPath = (Join-Path $projectRoot 'maixcam/maixcam_task.c').Replace('\','/')

@@ -144,10 +144,14 @@
    face away from the mapped safety heading, advance, then search CCW360. */
 #define ROBOT_S51_SECOND_E3_FORWARD_RPM         100
 #define ROBOT_S51_SECOND_E3_FORWARD_MS         1200U
-/* First red E3 recovery after07: advance instead of reversing, then CCW360.
-   Other03/04 and initial-green recovery paths retain their existing actions. */
+/* Shared after07 red E3/E4 sweep: advance, L60/hold/R120/hold/L60 home.
+   Red E4 first faces away from safety. Other target paths stay unchanged. */
 #define ROBOT_S7_E3_SEARCH_FORWARD_RPM          80
 #define ROBOT_S7_E3_SEARCH_FORWARD_MS          800U
+#define ROBOT_S7_E3_SEARCH_SIDE_CDEG          6000L
+#define ROBOT_S7_E3_SEARCH_HOLD_MS             500U
+#define ROBOT_S7_E3_SEARCH_TURN_FAST_RPM         45
+#define ROBOT_S7_E3_SEARCH_TURN_SLOW_RPM         15
 #define ROBOT_E3_SEARCH_CCW_CDEG             36000L
 #define ROBOT_E3_SEARCH_SPIN_TIMEOUT_MS       20000U
 /* Initial green E3: drive forward, then sweep left/right and face the
@@ -172,12 +176,13 @@
 #define ROBOT_VISION_Y_KD                    0.00f
 #define ROBOT_VISION_Y_INTEGRAL_LIMIT      500.0f
 #define ROBOT_VISION_Y_MIN_FORWARD_RPM        12.0f
-/* Far-target03 and supplement03 retain120..150. Near targets use the shared
-   object-approach profile below instead of a fixed high minimum. */
+/* Far-target03/04 and their supplement references use120..150.
+   Their forward near-approach profile is independent of24 and reverse. */
 #define ROBOT_VISION_03_MIN_FORWARD_RPM       120.0f
 #define ROBOT_VISION_03_MAX_FORWARD_RPM       150.0f
 #define ROBOT_VISION_03_WHEEL_MAX_RPM           150
-#define ROBOT_VISION_04_MIN_FORWARD_RPM        70.0f
+#define ROBOT_VISION_04_MIN_FORWARD_RPM       120.0f
+#define ROBOT_VISION_04_MAX_FORWARD_RPM       150.0f
 #define ROBOT_VISION_Y_MAX_FORWARD_RPM       130.0f
 #define ROBOT_VISION_Y_FORWARD_SIGN             -1
 #define ROBOT_VISION_TRACK_WHEEL_MAX_RPM       130
@@ -187,6 +192,11 @@
 #define ROBOT_VISION_OBJECT_FAR_BEGIN_PX         200
 #define ROBOT_VISION_OBJECT_NEAR_MIN_RPM       20.0f
 #define ROBOT_VISION_OBJECT_NEAR_MAX_RPM       40.0f
+/* Forward near approach; backward corrections retain the20..40 profile. */
+#define ROBOT_VISION_03_04_NEAR_MIN_RPM        40.0f
+#define ROBOT_VISION_03_04_NEAR_MAX_RPM        70.0f
+#define ROBOT_VISION_24_NEAR_MIN_RPM           40.0f
+#define ROBOT_VISION_24_NEAR_MAX_RPM           70.0f
 #define ROBOT_VISION_OBJECT_REVERSE_MAX_RPM    30.0f
 #define ROBOT_VISION_OBJECT_REVERSE_FRAMES        2U
 #define ROBOT_VISION_Y_JUMP_LOG_PX               120
@@ -197,9 +207,9 @@
 /* S4 multi-object arrangement protocol: 04 -> 14/14 -> 02 -> 12/12 ->
    24 -> 34. MaixCam coordinates are signed errors to the reference point
    selected by its current mode. All timings are initial tuning values. */
-#define ROBOT_S4_TRACK_FORWARD_MAX_RPM             70
+#define ROBOT_S4_TRACK_FORWARD_MAX_RPM            150
 #define ROBOT_S4_TRACK_TURN_MAX_RPM                35
-#define ROBOT_S4_TRACK_WHEEL_MAX_RPM               90
+#define ROBOT_S4_TRACK_WHEEL_MAX_RPM              150
 #define ROBOT_S4_FINAL_X_KP                       0.09f
 #define ROBOT_S4_FINAL_Y_KP                       0.30f
 #define ROBOT_S4_FINAL_MIN_TURN_RPM                3.0f
@@ -226,10 +236,6 @@
 #define ROBOT_S4_E4_GREEN_SPIN_TIMEOUT_MS         20000U
 #define ROBOT_S4_E4_GREEN_SPIN_FAST_RPM              20
 #define ROBOT_S4_E4_GREEN_SPIN_SLOW_RPM              12
-#define ROBOT_S4_E4_RED_SPIN_CDEG                 36000L
-#define ROBOT_S4_E4_RED_SPIN_TIMEOUT_MS            20000U
-#define ROBOT_S4_E4_RED_SPIN_FAST_RPM                 20
-#define ROBOT_S4_E4_RED_SPIN_SLOW_RPM                 12
 #define ROBOT_S4_POST22_REVERSE_RPM                 70
 #define ROBOT_S4_POST22_REVERSE_MS                 400U
 #define ROBOT_S4_POST22_LEFT_CDEG                 4500L
@@ -272,7 +278,7 @@
    durations and ramp times are derived from these cruise speeds. */
 #define ROBOT_S4_RIGHT_REVERSE_RPM                 120
 #define ROBOT_S4_LEFT_REVERSE_RPM                  120
-#define ROBOT_S4_LEFT_REVERSE_DISTANCE_PERCENT      80U
+#define ROBOT_S4_LEFT_REVERSE_DISTANCE_PERCENT     100U
 #define ROBOT_S4_ARRANGE_RECOVERY_REVERSE_RPM        60
 #define ROBOT_S4_ARRANGE_RECOVERY_REVERSE_MS        400U
 #define ROBOT_S4_ARRANGE_RECOVERY_LEFT_CDEG         4500L
@@ -306,7 +312,7 @@
 /* S5 waits for MaixCam event 06 after sending team-colour command 15/25. */
 #define ROBOT_S5_DEBUG_PERIOD_MS ROBOT_DEBUG_PERIOD_MS
 /* Nonblocking near-camera settling after the corner-return RX05 handshake. */
-#define ROBOT_S6_RECHECK_CAMERA_SETTLE_MS         500U
+#define ROBOT_S6_RECHECK_CAMERA_SETTLE_MS         300U
 /* Vision pauses output for800ms after recheck06 while the camera rises. */
 #define ROBOT_S6_RECHECK_WIDE_SETTLE_MS           800U
 /* Only the05 ->02 preparation turn; other shared yaw limits stay unchanged. */
@@ -343,23 +349,23 @@
    the second and later attempts use the former long-forward sweep. */
 #define ROBOT_S6_RECOVERY_WAIT_MS                  1000U
 #define ROBOT_S6_RECOVERY_LONG_START_COUNT             2U
-#define ROBOT_S6_RECOVERY_LONG_FORWARD_RPM             70
-#define ROBOT_S6_RECOVERY_LONG_FORWARD_MS            2000U
-#define ROBOT_S6_RECOVERY_LONG_WHEEL_MAX_RPM           80
+#define ROBOT_S6_RECOVERY_LONG_FORWARD_RPM            120
+#define ROBOT_S6_RECOVERY_LONG_FORWARD_MS            1500U
+#define ROBOT_S6_RECOVERY_LONG_WHEEL_MAX_RPM          130
 /* Complete the long forward segment before reacquiring from coordinates/16.
    UART parsing and explicit05/26/36 commands or safety stops remain active. */
 /* Moving yaw hold must not inherit the 30 rpm minimum for stationary turns.
-   +/-10 rpm keeps a 70 rpm cruise within the existing 80 rpm wheel cap. */
+   +/-10 rpm keeps a 120 rpm cruise within the 130 rpm wheel cap. */
 #define ROBOT_S6_RECOVERY_FORWARD_MAX_CORRECTION_RPM 10.0f
 #define ROBOT_S6_RECOVERY_LEFT_ANGLE_CDEG           4500L
 #define ROBOT_S6_RECOVERY_RIGHT_ANGLE_CDEG          9000L
-/* Recovery scans and safe-heading turns have independent speed limits. */
-#define ROBOT_S6_RECOVERY_SCAN_MAX_RPM             60.0f
-#define ROBOT_S6_RECOVERY_SCAN_MIN_RPM             40.0f
+/* Recovery L45/R90 scans use20rpm; safe-heading turn limits stay independent. */
+#define ROBOT_S6_RECOVERY_SCAN_MAX_RPM             20.0f
+#define ROBOT_S6_RECOVERY_SCAN_MIN_RPM             20.0f
 #define ROBOT_S6_RECOVERY_SAFE_MAX_RPM             50.0f
 #define ROBOT_S6_RECOVERY_SAFE_MIN_RPM             30.0f
 #define ROBOT_S6_RECOVERY_TURN_STABLE_MS              0U
-/* Advance to the next action after1s instead of remaining in the turn. */
+/* Advance at the shared2s deadline instead of remaining in the turn. */
 #define ROBOT_S6_TURN_TIMEOUT_MS ROBOT_HEADING_TURN_TIMEOUT_MS
 #define ROBOT_S6_TURN_TOLERANCE_CDEG                400L
 #define ROBOT_S6_TURN_STABLE_MS                     200U
@@ -386,7 +392,7 @@
 /* Accumulate valid visual tracking before any approach side-angle decision.
    Each acquisition, including every side-return, starts a new interval.
    Side decisions use yaw sectors only; X error is not an entry condition. */
-#define ROBOT_S6_PRE_REPOSITION_TRACK_MS             500U
+#define ROBOT_S6_PRE_REPOSITION_TRACK_MS            1000U
 /* Stable X within this range enables the full Y approach speed;
    unaligned tracking uses ROBOT_S6_APPROACH_UNALIGNED_RPM instead.
    This threshold does not gate side reposition. */
@@ -444,7 +450,7 @@
   {4U, ROBOT_TEAM_BLUE, 1U, 1U,  9000L, 16500L,  9000L, 1U, 1U}, \
   {4U, ROBOT_TEAM_BLUE, 1U, 1U, 19000L, 22400L, 27000L, 0U, 1U}
 /* Supplies and casualties share corner evacuation, start-zero mapping and
-   the 500ms visual tracking gate. Corner decisions precede ordinary side motion.
+   the 1000ms visual tracking gate. Corner decisions precede ordinary side motion.
    Shared boundaries are excluded from evacuation:
    safe=180: [90,135) ->90; (224,270] ->270.
    safe=0: [270,315) ->270; (44,90] ->90.
@@ -553,6 +559,11 @@
 #define ROBOT_SUPPLEMENT_WIDE_SETTLE_MS    500U
 #define ROBOT_SUPPLEMENT_LOST_MS         1000U
 #define ROBOT_SUPPLEMENT_TURN_MAX_RPM    20.0f
+/* Accepted03 E3: first L45/R90 then TX13; only post13 E3 can use CCW360.
+   Keep this count/handshake across reacquisition/rechecks in the15s session. */
+#define ROBOT_SUPPLEMENT_E3_TURN_MAX_RPM 30.0f
+#define ROBOT_SUPPLEMENT_E3_SPIN_RPM        30
+#define ROBOT_SUPPLEMENT_E3_SPIN_CDEG   36000L
 /* Once04/24 arrives, reuse the ordinary S4 capture/servo parameters above. */
 #define ROBOT_CAMERA_SERVO_MIN_PULSE_US  500U
 #define ROBOT_CAMERA_SERVO_MAX_PULSE_US 2500U

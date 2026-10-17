@@ -4,6 +4,7 @@ static void tick(uint32_t now) {
   fake_now=now; MissionTask_UpdateVisionInput(now);
   MissionTask_CheckRunningHealth(now); (void)MissionTask_HandleLoadCheckRequest(now);
   MissionTask_HandleSupplementControl(now); MissionTask_HandleRedPriorityRequest(now);
+  MissionTask_DropDuplicateRecoveryEvent(now);
   run_normal_s4(now); MissionTask_RunS6LoadRecheck(now);
   MissionTask_RunS5WaitSingleGreen(now); MissionTask_RunSupplement(now);
 }
@@ -22,6 +23,7 @@ static void setup(uint8_t cmd,bool after07) {
   stops=wide_calls=near_calls=frame_raise_calls=frame_partial_calls=frame_lower_calls=tx_count=0;
   frame_lift=0; wide_ok=near_ok=frame_lower_ok=tx_ok=true; health_faults=0;
   inject06_on_tx=0; expire_on_tx=false; turn_soft_logs=search_soft_logs=0;
+  inject_e3_on13_tx=false;
   inject05_result_on_tx=inject05_result_on_stop=0;
   fake_now=100; MissionTask_EnterState(MISSION_STATE_S5_WAIT_SINGLE_GREEN,100);
   MaixCam_SetSupplementWindowEnabled(after07 && cmd==0x51);
@@ -40,13 +42,16 @@ static void recovery_tick(uint32_t now,bool new_coord) {
   MissionTask_RunS6Recovery(now);
 }
 static void verify_recovery_forward_lock(void) {
-  assert(ROBOT_S6_RECOVERY_LONG_FORWARD_RPM==70 && ROBOT_S6_RECOVERY_LONG_FORWARD_MS==2000);
+  const uint32_t end=120U+ROBOT_S6_RECOVERY_LONG_FORWARD_MS;
+  assert(ROBOT_S6_RECOVERY_LONG_FORWARD_RPM==120 && ROBOT_S6_RECOVERY_LONG_FORWARD_MS==1500);
+  assert(ROBOT_S6_RECOVERY_LONG_WHEEL_MAX_RPM==130 && ROBOT_S6_RECOVERY_FORWARD_MAX_CORRECTION_RPM==10.0f);
+  assert(ROBOT_S6_RECOVERY_SCAN_MAX_RPM==20.0f && ROBOT_S6_RECOVERY_SCAN_MIN_RPM==20.0f);
   //Second and subsequent long-forward recoveries cannot finish from coordinates early.
   for(uint8_t count=1;count<=3;++count) {
-    recovery_setup(count,true);recovery_tick(140,true);recovery_tick(1000,true);recovery_tick(2119,true);
+    recovery_setup(count,true);recovery_tick(140,true);recovery_tick(1000,true);recovery_tick(end-1U,true);
     assert(mission_snapshot.state==MISSION_STATE_S6_RECOVERY_START && s6_recovery_count==count+1);
-    assert(mission_snapshot.state_entry_tick==120 && mission_snapshot.left_target_rpm==70 && mission_snapshot.right_target_rpm==70);
-    recovery_tick(2120,false);
+    assert(mission_snapshot.state_entry_tick==120 && mission_snapshot.left_target_rpm==120 && mission_snapshot.right_target_rpm==120);
+    recovery_tick(end,false);
     assert(mission_snapshot.state==MISSION_STATE_S6_TRACK_SAFE_ZONE);
     assert(mission_snapshot.vision_target_valid && mission_snapshot.vision_x_error_px==30 && mission_snapshot.vision_y_error_px==-50);
   }
@@ -55,31 +60,34 @@ static void verify_recovery_forward_lock(void) {
   assert(s6_recovery_found16_pending && mission_snapshot.state==MISSION_STATE_S6_RECOVERY_START);
   recovery_tick(300,true);fake_now=400;rx(0x16);recovery_tick(400,false);
   assert(mission_snapshot.vision_target_valid && s6_recovery_found16_pending && mission_snapshot.state_entry_tick==120);
-  recovery_tick(2119,true);recovery_tick(2120,false);
+  recovery_tick(end-1U,true);recovery_tick(end,false);
   assert(mission_snapshot.state==MISSION_STATE_S6_TRACK_SAFE_ZONE && !s6_recovery_found16_pending);
   assert(mission_snapshot.vision_target_valid && mission_snapshot.vision_x_error_px==30 && mission_snapshot.vision_y_error_px==-50);
   //Stale coordinates after saved16 never feed PID; resume stopped, awaiting new frames.
   recovery_setup(1,false);fake_now=200;rx(0x16);recovery_tick(200,false);
-  recovery_tick(300,true);recovery_tick(2120,false);
+  recovery_tick(300,true);recovery_tick(end,false);
   assert(mission_snapshot.state==MISSION_STATE_S6_TRACK_SAFE_ZONE && !mission_snapshot.vision_target_valid);
   assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
   //Without16, initial search coordinates do not authorize tracking; the scan resumes.
-  recovery_setup(1,false);recovery_tick(2119,true);recovery_tick(2120,false);
+  recovery_setup(1,false);recovery_tick(end-1U,true);recovery_tick(end,false);
   assert(mission_snapshot.state==MISSION_STATE_S6_RECOVERY_TURN_LEFT);
-  fake_now=2140;rx(0x16);recovery_tick(2140,false);
+  fake_now=end+20U;rx(0x16);recovery_tick(end+20U,false);
   assert(mission_snapshot.state==MISSION_STATE_S6_TRACK_SAFE_ZONE);
   //No live coordinates: finish the forward leg, then allow scan interruption.
-  recovery_setup(1,true);recovery_tick(2120,false);
+  recovery_setup(1,true);recovery_tick(end,false);
   assert(mission_snapshot.state==MISSION_STATE_S6_RECOVERY_TURN_LEFT);
-  recovery_tick(2140,true);assert(mission_snapshot.state==MISSION_STATE_S6_TRACK_SAFE_ZONE);
+  recovery_tick(end+20U,true);assert(mission_snapshot.state==MISSION_STATE_S6_TRACK_SAFE_ZONE);
   //First sweep remains immediately interruptible, without mandatory forward motion.
   recovery_setup(0,true);recovery_tick(140,true);
   assert(mission_snapshot.state==MISSION_STATE_S6_TRACK_SAFE_ZONE);
+  recovery_setup(0,true);recovery_tick(140,false);
+  assert(mission_snapshot.state==MISSION_STATE_S6_RECOVERY_TURN_LEFT);
+  assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
   //Clock wrapping must not unlock the forward leg early.
   recovery_setup(1,true);uint32_t start=UINT32_MAX-1000U;
   mission_snapshot.state_entry_tick=start;
-  recovery_tick(start+1999U,true);assert(mission_snapshot.state==MISSION_STATE_S6_RECOVERY_START);
-  recovery_tick(start+2000U,false);assert(mission_snapshot.state==MISSION_STATE_S6_TRACK_SAFE_ZONE);
+  recovery_tick(start+ROBOT_S6_RECOVERY_LONG_FORWARD_MS-1U,true);assert(mission_snapshot.state==MISSION_STATE_S6_RECOVERY_START);
+  recovery_tick(start+ROBOT_S6_RECOVERY_LONG_FORWARD_MS,false);assert(mission_snapshot.state==MISSION_STATE_S6_TRACK_SAFE_ZONE);
   //Explicit26, universal05, health faults and stop still preempt the forward leg.
   recovery_setup(1,true);fake_now=200;rx(0x26);MissionTask_HandleS6AlignRequest(200);recovery_tick(200,false);
   assert(mission_snapshot.state==MISSION_STATE_S6_FINAL_ALIGN);
@@ -158,6 +166,7 @@ static void verify_budget_request_handshake(void) {
   //Budget expiry can preempt03,04,24 and their recovery/capture motion.
   const MissionState phases[]={MISSION_STATE_SUPPLEMENT_WIDE_SETTLE,
       MISSION_STATE_SUPPLEMENT_TRACK,MISSION_STATE_SUPPLEMENT_TURN_LEFT,
+      MISSION_STATE_SUPPLEMENT_E3_SPIN_CCW,
       MISSION_STATE_SUPPLEMENT_TURN_RIGHT,MISSION_STATE_S4_TRACK_CENTER,
       MISSION_STATE_S4_WAIT_ARRANGE_READY,MISSION_STATE_S4_TRACK_FINAL_BLOCK,
       MISSION_STATE_S4_FINAL_CENTER_OBJECT,MISSION_STATE_S4_FINAL_LOWER_FRAME};
@@ -183,8 +192,9 @@ static void verify_budget_request_handshake(void) {
     assert(tx_count==before+1);
     fake_now=first+16040U;rx(0x05);tick(fake_now);
     assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT);
-    tick(first+16539U);assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT);
-    final_report(5,first+16540U); assert_review_route(0x06);
+    tick(first+16040U+ROBOT_S6_RECHECK_CAMERA_SETTLE_MS-1U);
+    assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT);
+    final_report(5,first+16040U+ROBOT_S6_RECHECK_CAMERA_SETTLE_MS); assert_review_route(0x06);
     assert(tx_count==before+1);
   }
   //A reply received while TX05 is completing may contain05/ID/result/16
@@ -201,8 +211,9 @@ static void verify_budget_request_handshake(void) {
     //Duplicate05 must not reset this hold, erase the result or echo05.
     fake_now=review_start+20U;rx(0x05);tick(fake_now);
     assert(mission_snapshot.state_entry_tick==review_start && tx_count==before+1);
-    tick(review_start+499U);assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT);
-    tick(review_start+500U);assert_review_route(results[i]);
+    tick(review_start+ROBOT_S6_RECHECK_CAMERA_SETTLE_MS-1U);
+    assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT);
+    tick(review_start+ROBOT_S6_RECHECK_CAMERA_SETTLE_MS);assert_review_route(results[i]);
     if(results[i]==0x06) {
       uint8_t event;assert(MaixCam_PeekEvent(&event) && event==0x16);
     }
@@ -216,7 +227,7 @@ static void verify_budget_request_handshake(void) {
     tick(first+15000U);
     assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT && tx_count==before);
     uint32_t review_start=mission_snapshot.state_entry_tick;
-    tick(review_start+500U);assert_review_route(results[i]);assert(tx_count==before);
+    tick(review_start+ROBOT_S6_RECHECK_CAMERA_SETTLE_MS);assert_review_route(results[i]);assert(tx_count==before);
     if(results[i]==0x06) {
       uint8_t event;assert(MaixCam_PeekEvent(&event) && event==0x16);
     }
@@ -248,12 +259,12 @@ static void verify_budget_request_handshake(void) {
     assert(tx_count==before+(failure==0?1:0));
     unsigned sent=tx_count;tick(first+20000U);assert(tx_count==sent);
   }
-  puts("PASS: exhausted03/04/24 budgets TX05 once, full-frame closure/retained session, preTX and inTX05+ID+06/02/24 bursts, no postTX event clear/no AUTO06,500ms/duplicate/partial-frame/wrap and failure safety");
+  puts("PASS: exhausted03/04/24 budgets TX05 once, full-frame closure/retained session, preTX and inTX05+ID+06/02/24 bursts, no postTX event clear/no AUTO06,300ms/duplicate/partial-frame/wrap and failure safety");
 }
 static void verify_direct_supplement03(void) {
   const MissionState phases[]={MISSION_STATE_SUPPLEMENT_WIDE_SETTLE,
       MISSION_STATE_SUPPLEMENT_TRACK,MISSION_STATE_SUPPLEMENT_TURN_LEFT,
-      MISSION_STATE_SUPPLEMENT_TURN_RIGHT};
+      MISSION_STATE_SUPPLEMENT_TURN_RIGHT,MISSION_STATE_SUPPLEMENT_E3_SPIN_CCW};
   for(unsigned i=0;i<sizeof(phases)/sizeof(phases[0]);++i) {
     setup(0x51,true);request();start_tracking();
     uint32_t first=supplement_first_request_tick;uint8_t count=supplement_capture_count;
@@ -306,22 +317,143 @@ static void verify_direct_supplement03(void) {
   tick(first+15500);assert(mission_snapshot.state==MISSION_STATE_S6_SEARCH_SAFE_ZONE);
   puts("PASS:supplement03 direct wide tracking, legacy entry05 ignored without coordinate/event/cargo/budget loss, duplicate03/TX burst/partial05 fences;04/24 and final budget05 review preserved");
 }
+static void verify_supplement_e3_recovery(void) {
+  assert(ROBOT_SUPPLEMENT_E3_TURN_MAX_RPM==30.0f && ROBOT_SUPPLEMENT_E3_SPIN_RPM==30);
+  assert(ROBOT_SUPPLEMENT_E3_SPIN_CDEG==36000 && ROBOT_SUPPLEMENT_TURN_MAX_RPM==20.0f);
+  assert(MISSION_STATE_S4_E4_MATERIAL_SPIN_CW_360==97 && MISSION_STATE_SUPPLEMENT_E3_SPIN_CCW==98);
+  // First actual E3: real angle PID commands L45/R90 at30rpm; duplicates do not count.
+  setup(0x51,true);request();start_tracking();
+  unsigned sent=tx_count;uint32_t first=supplement_first_request_tick;
+  uint32_t now=fake_now+20;fake_now=now;rx(0xE3);tick(now);
+  assert(supplement_e3_recovery_count==1 && mission_snapshot.state==MISSION_STATE_SUPPLEMENT_TURN_LEFT);
+  int32_t center=mission_snapshot.yaw_cdeg;
+  assert(supplement_left_yaw_cdeg==MissionTask_WrapYaw(center+ROBOT_YAW_LEFT_SIGN*4500));
+  assert(supplement_right_yaw_cdeg==MissionTask_WrapYaw(center-ROBOT_YAW_LEFT_SIGN*4500));
+  rx(0xE3);tick(now+20);
+  assert(supplement_e3_recovery_count==1 && mission_snapshot.state_entry_tick==now);
+  assert(mission_snapshot.left_target_rpm==-30 && mission_snapshot.right_target_rpm==30);
+  mission_snapshot.yaw_cdeg=supplement_left_yaw_cdeg;tick(now+40);tick(now+240);
+  assert(mission_snapshot.state==MISSION_STATE_SUPPLEMENT_TURN_RIGHT);
+  tick(now+260);assert(mission_snapshot.left_target_rpm==30 && mission_snapshot.right_target_rpm==-30);
+  mission_snapshot.yaw_cdeg=supplement_right_yaw_cdeg;tick(now+280);tick(now+480);
+  assert(mission_snapshot.state==MISSION_STATE_SUPPLEMENT_TRACK && supplement_e3_recovery_count==1);
+  assert(tx_count==sent+1 && tx_commands[sent]==0x13 && supplement_e3_first_ack_sent);
+  assert(supplement_first_request_tick==first && supplement_capture_count==1);
+  sent=tx_count;
+  // Second E3 accumulates a real360 across0/360; no fixed-turn2s shortcut.
+  fake_now=now+500;rx(0xE3);tick(fake_now);
+  assert(mission_snapshot.state==MISSION_STATE_SUPPLEMENT_E3_SPIN_CCW && supplement_e3_recovery_count==2);
+  uint32_t spin=mission_snapshot.state_entry_tick;
+  assert(MissionTask_ActiveRecoveryLossEvent()==0xE3 && maixcam_supplement_direct_search);
+  tick(spin+20);assert(mission_snapshot.left_target_rpm==-30 && mission_snapshot.right_target_rpm==30);
+  // Wrong/stale target classes must not cancel the spin.
+  fake_now=spin+40;coords(4,20,60);tick(fake_now);
+  assert(mission_snapshot.state==MISSION_STATE_SUPPLEMENT_E3_SPIN_CCW && !mission_snapshot.vision_target_valid);
+  fake_now=spin+60;coords(5,20,60);tick(fake_now+501);
+  assert(mission_snapshot.state==MISSION_STATE_SUPPLEMENT_E3_SPIN_CCW && !mission_snapshot.vision_target_valid);
+  tick(spin+2020);assert(mission_snapshot.state==MISSION_STATE_SUPPLEMENT_E3_SPIN_CCW);
+  for(unsigned i=1;i<=3;++i) {
+    mission_snapshot.yaw_cdeg=MissionTask_WrapYaw(mission_snapshot.yaw_cdeg+9000L);
+    fake_now=spin+2020+i*20;rx(0xE3);tick(fake_now);
+    assert(supplement_e3_recovery_count==2 && mission_snapshot.state_entry_tick==spin);
+  }
+  assert(supplement_e3_spin_progress_cdeg==27000 && mission_snapshot.state==MISSION_STATE_SUPPLEMENT_E3_SPIN_CCW);
+  mission_snapshot.yaw_cdeg=MissionTask_WrapYaw(mission_snapshot.yaw_cdeg+8999L);tick(spin+2100);
+  assert(supplement_e3_spin_progress_cdeg==35999 && mission_snapshot.state==MISSION_STATE_SUPPLEMENT_E3_SPIN_CCW);
+  mission_snapshot.yaw_cdeg=MissionTask_WrapYaw(mission_snapshot.yaw_cdeg+1L);tick(spin+2120);
+  assert(supplement_e3_spin_progress_cdeg==36000 && mission_snapshot.state==MISSION_STATE_SUPPLEMENT_TRACK);
+  assert(!mission_snapshot.left_target_rpm && tx_count==sent && supplement_first_request_tick==first);
+  // Reacquisition can interrupt either first-sweep leg or the second spin.
+  const MissionState phases[]={MISSION_STATE_SUPPLEMENT_TURN_LEFT,MISSION_STATE_SUPPLEMENT_TURN_RIGHT,
+      MISSION_STATE_SUPPLEMENT_E3_SPIN_CCW};
+  for(unsigned i=0;i<3;++i) {
+    setup(0x51,true);request();start_tracking();first=supplement_first_request_tick;sent=tx_count;
+    supplement_e3_recovery_count=i==2?1:0;supplement_e3_first_ack_sent=i==2;
+    now=fake_now+20;fake_now=now;rx(0xE3);tick(now);
+    if(i==1) MissionTask_EnterState(MISSION_STATE_SUPPLEMENT_TURN_RIGHT,now+20);
+    uint8_t used=supplement_e3_recovery_count;fake_now=now+40;coords(i&1?6:5,20,60);tick(fake_now);
+    assert(mission_snapshot.state==MISSION_STATE_SUPPLEMENT_TRACK && supplement_e3_recovery_count==used);
+    assert(tx_count==sent && supplement_first_request_tick==first && supplement_capture_count==1);
+    // If interrupted before TX13, an8s resend still belongs to round1.
+    // If TX13 already completed, the next accepted E3 remains the spin.
+    fake_now=now+8000;rx(0xE3);tick(fake_now);
+    assert(mission_snapshot.state==(i==2?MISSION_STATE_SUPPLEMENT_E3_SPIN_CCW:MISSION_STATE_SUPPLEMENT_TURN_LEFT));
+    assert(supplement_e3_recovery_count==(i==2?used+1:used) && tx_count==sent);
+    //15s still ends the maneuver and requests final review exactly once.
+    tick(first+15000);
+    assert(supplement_budget_exhausted && mission_snapshot.state==MISSION_STATE_SUPPLEMENT_WAIT_RECHECK);
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm && tx_commands[tx_count-1]==0x05);
+  }
+  // Silent timeout uses the same search, but does not consume an actual E3.
+  setup(0x51,true);request();start_tracking();now=fake_now;
+  tick(now+1000);assert(supplement_e3_recovery_count==0 && mission_snapshot.state==MISSION_STATE_SUPPLEMENT_TURN_LEFT);
+  fake_now=now+1020;coords(5,20,60);tick(fake_now);
+  fake_now=now+1540;rx(0xE3);tick(fake_now);
+  assert(supplement_e3_recovery_count==1 && mission_snapshot.state==MISSION_STATE_SUPPLEMENT_TURN_LEFT);
+  // A real E3 arriving during a silent sweep is adopted, not discarded and
+  // not restarted. TX13-time E3 must survive for the next task tick.
+  setup(0x51,true);request();start_tracking();now=fake_now;
+  tick(now+1000);uint32_t sweep_entry=mission_snapshot.state_entry_tick;
+  fake_now=now+1020;rx(0xE3);tick(fake_now);
+  assert(supplement_e3_recovery_count==1 && mission_snapshot.state_entry_tick==sweep_entry);
+  mission_snapshot.yaw_cdeg=supplement_left_yaw_cdeg;tick(now+1040);tick(now+1240);
+  mission_snapshot.yaw_cdeg=supplement_right_yaw_cdeg;tick(now+1260);
+  sent=tx_count;inject_e3_on13_tx=true;tick(now+1460);
+  assert(supplement_e3_first_ack_sent && tx_count==sent+1 && tx_commands[sent]==0x13);
+  tick(now+1480);
+  assert(mission_snapshot.state==MISSION_STATE_SUPPLEMENT_E3_SPIN_CCW && supplement_e3_recovery_count==2);
+  // Failed TX13 must not open round2 or continue moving.
+  setup(0x51,true);request();start_tracking();now=fake_now+20;fake_now=now;rx(0xE3);tick(now);
+  mission_snapshot.yaw_cdeg=supplement_left_yaw_cdeg;tick(now+20);tick(now+220);
+  mission_snapshot.yaw_cdeg=supplement_right_yaw_cdeg;tick(now+240);tx_ok=false;tick(now+440);
+  assert(mission_snapshot.state==MISSION_STATE_FAULT && !supplement_e3_first_ack_sent);
+  assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+  // Recheck03 continues the same attempt/count; a new extra attempt in the
+  // same15s session also retains this counter.
+  setup(0x51,true);request();start_tracking();supplement_e3_recovery_count=2;supplement_e3_first_ack_sent=true;
+  first=supplement_first_request_tick;fake_now+=20;rx(0x04);tick(fake_now);
+  fake_now+=20;rx(0x05);tick(fake_now);fake_now+=500;rx(0x03);tick(fake_now);
+  assert(mission_snapshot.state==MISSION_STATE_SUPPLEMENT_WIDE_SETTLE && supplement_e3_recovery_count==2 && supplement_e3_first_ack_sent);
+  assert(supplement_first_request_tick==first && supplement_capture_count==1);
+  MissionTask_StartSupplement(fake_now+20,fake_now+20);
+  assert(supplement_e3_recovery_count==2 && supplement_capture_count==2 && supplement_first_request_tick==first);
+  // Stop and hardware faults remain effective in the appended spin state.
+  const uint32_t faults[]={MISSION_FAULT_IMU,MISSION_FAULT_LEFT_MOTOR,MISSION_FAULT_RIGHT_MOTOR};
+  for(unsigned i=0;i<3;++i) {
+    setup(0x51,true);request();start_tracking();supplement_e3_recovery_count=1;supplement_e3_first_ack_sent=true;
+    fake_now+=20;rx(0xE3);tick(fake_now);health_faults=faults[i];tick(fake_now+20);
+    assert(mission_snapshot.state==MISSION_STATE_FAULT && !mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+    assert(!supplement_e3_recovery_count && !supplement_capture_active && !supplement_e3_first_ack_sent);
+  }
+  setup(0x51,true);request();start_tracking();supplement_e3_recovery_count=1;supplement_e3_first_ack_sent=true;
+  fake_now+=20;rx(0xE3);tick(fake_now);MissionTask_EnterState(MISSION_STATE_STOPPED,fake_now+20);
+  tick(fake_now+40);assert(mission_snapshot.state==MISSION_STATE_STOPPED && !supplement_e3_recovery_count);
+  puts("PASS:supplement03 E3 first L45/R90 at30rpm then TX13 once, second CCW30/accumulated360 across wrap; pre13 resends never escalate,duplicate/silent counts,reacquisition/recheck retention,no2s spin shortcut,ID5/6 freshness,15s final review and health/stop safety");
+}
 int main(void) {
+  assert(ROBOT_S6_RECHECK_CAMERA_SETTLE_MS==300U);
   verify_vision_approach();
   verify_recovery_forward_lock();
   verify_budget_request_handshake();
   verify_direct_supplement03();
+  verify_supplement_e3_recovery();
   //03/supplement03 slow down near the center; far and06 limits remain.
-  verify_speed_case(MISSION_STATE_S3_TRACK_GREEN,0x03,-50,31);
+  verify_speed_case(MISSION_STATE_S3_TRACK_GREEN,0x03,-50,57);
   verify_speed_case(MISSION_STATE_S3_TRACK_GREEN,0x03,-448,150);
-  verify_speed_case(MISSION_STATE_SUPPLEMENT_TRACK,0x03,-50,31);
+  verify_speed_case(MISSION_STATE_SUPPLEMENT_TRACK,0x03,-50,57);
   verify_speed_case(MISSION_STATE_SUPPLEMENT_TRACK,0x03,-448,150);
   verify_speed_case(MISSION_STATE_S6_TRACK_SAFE_ZONE,0x03,-50,100);
   verify_speed_case(MISSION_STATE_S6_TRACK_SAFE_ZONE,0x03,-448,150);
-  //04/24 far limits stay unchanged;24 slows down near its ROI reference.
-  verify_speed_case(MISSION_STATE_S4_TRACK_CENTER,0x04,-448,70);
-  verify_speed_case(MISSION_STATE_S4_TRACK_FINAL_BLOCK,0x24,-50,31);
+  //03/04 share120..150 far;24 shares40..70 near but retains its120 cap.
+  verify_speed_case(MISSION_STATE_S4_TRACK_CENTER,0x04,-50,57);
+  verify_speed_case(MISSION_STATE_S4_TRACK_CENTER,0x04,-200,120);
+  verify_speed_case(MISSION_STATE_S4_TRACK_CENTER,0x04,-448,150);
+  verify_speed_case(MISSION_STATE_SUPPLEMENT_TRACK,0x04,-50,57);
+  verify_speed_case(MISSION_STATE_SUPPLEMENT_TRACK,0x04,-448,150);
+  verify_speed_case(MISSION_STATE_S4_TRACK_FINAL_BLOCK,0x24,-50,57);
+  verify_speed_case(MISSION_STATE_S4_TRACK_FINAL_BLOCK,0x24,-200,70);
   verify_speed_case(MISSION_STATE_S4_TRACK_FINAL_BLOCK,0x24,-448,120);
+  verify_speed_case(MISSION_STATE_SUPPLEMENT_TRACK,0x24,-50,57);
   verify_speed_case(MISSION_STATE_SUPPLEMENT_TRACK,0x24,-448,120);
   assert(MISSION_STATE_S3_E3_TURN_AWAY==95 && MISSION_STATE_SUPPLEMENT_WAIT_RECHECK==96);
   const MissionState phases[]={MISSION_STATE_S5_WAIT_SINGLE_GREEN,
@@ -362,15 +494,16 @@ int main(void) {
     assert(!s4_final_event34_pending && !s4_e4_protocol_active && !s4_post22_search_active);
     assert(!vision_search_forward_active && !vision_search_e3_mode && !supplement_recovery_event);
     assert(near_calls==1 && tx_count==0 && lifts==frame_raise_calls+frame_partial_calls && lowers==frame_lower_calls);
-    tick(619); assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT);
-    final_report(i&1?4:5,620);
+    tick(120U+ROBOT_S6_RECHECK_CAMERA_SETTLE_MS-1U);
+    assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT);
+    final_report(i&1?4:5,120U+ROBOT_S6_RECHECK_CAMERA_SETTLE_MS);
     assert(mission_snapshot.state==MISSION_STATE_S6_SEARCH_SAFE_ZONE);
     assert(s6_carried_object_id==(i&1?4:5) && s5_load_class_confirmed && !supplement_budget_started);
     assert(frame_lift==0 && wide_calls==1 && tx_count==0);
     assert(MissionTask_S6IsCasualtyTarget()==(bool)(i&1));
   }
   // A new05 is accepted while already near; same-window repeats never erase
-  // a report, restart500ms, move the frame or echo05 back to the camera.
+  // a report, restart300ms, move the frame or echo05 back to the camera.
   setup(0x11,true); s5_close_view_active=true;
   fake_now=120; rx(0x05); tick(120); unsigned near_before=near_calls;
   fake_now=300; coords(4,0,0); rx(0x05); rx(0xE4); tick(300);
@@ -402,8 +535,9 @@ int main(void) {
   //02/24 are accepted only after the count hold and keep the existing routes.
   for(unsigned result=0;result<2;++result) {
     setup(0x51,true); fake_now=120; rx(0x05); rx(result?0x24:0x02); tick(120);
-    tick(619); assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT);
-    tick(620);
+    tick(120U+ROBOT_S6_RECHECK_CAMERA_SETTLE_MS-1U);
+    assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT);
+    tick(120U+ROBOT_S6_RECHECK_CAMERA_SETTLE_MS);
     assert(mission_snapshot.state==(result?MISSION_STATE_S4_RAISE_FRAME:MISSION_STATE_S5_ALIGN_FOR_ARRANGE));
     assert(!maixcam_load_recheck_enabled && wide_calls==1 && tx_count==0);
   }
@@ -416,10 +550,13 @@ int main(void) {
   fake_now+=20; rx(0x05); tick(fake_now);
   assert(s5_recheck_resume_supplement && supplement_capture_count==count && supplement_first_request_tick==first);
   uint32_t paused=mission_snapshot.state_entry_tick;
-  fake_now=paused+20; rx(0x03); tick(fake_now); //early03 remains latched until500ms
+  fake_now=paused+20; rx(0x03); tick(fake_now); //early03 remains latched until300ms
   assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT);
   frame_lift=88;
-  tick(paused+500); assert(mission_snapshot.state==MISSION_STATE_SUPPLEMENT_WIDE_SETTLE);
+  tick(paused+ROBOT_S6_RECHECK_CAMERA_SETTLE_MS-1U);
+  assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT);
+  tick(paused+ROBOT_S6_RECHECK_CAMERA_SETTLE_MS);
+  assert(mission_snapshot.state==MISSION_STATE_SUPPLEMENT_WIDE_SETTLE);
   assert(frame_lift==0 && s6_carried_object_id==6);
   start_tracking(); assert(supplement_capture_count==count && supplement_first_request_tick==first);
   //15s never transports the cargo without a final05, including when counting.
@@ -526,5 +663,5 @@ int main(void) {
   setup(0x51,true); rx(0x05); tick(120); MissionTask_EnterState(MISSION_STATE_STOPPED,140); tick(160);
   assert(mission_snapshot.state==MISSION_STATE_STOPPED && !mission_snapshot.left_target_rpm && !maixcam_load_recheck_enabled);
   assert(fake_rx_arms==rx_bytes+uart_inits);
-  puts("PASS:6E long-forward coordinate/16 lock, fresh/stale resume and command/safety priority; final05 interrupts ordinary/capture/arrangement/recovery/corner states except direct supplementary03; stop/near/retained load/no ACK; repeated05, zero-ID reports+50ms06,500ms result hold,02/24 routes; priority/freshness/partial-frame fences; budget limits request05 ONCE/no AUTO06; same-attempt03/no budget reset; corner guard/8s count; servo/health/stop/UART safety");
+  puts("PASS:6E long-forward coordinate/16 lock, fresh/stale resume and command/safety priority; final05 interrupts ordinary/capture/arrangement/recovery/corner states except direct supplementary03; stop/near/retained load/no ACK; repeated05, zero-ID reports+50ms06,300ms result hold,02/24 routes; priority/freshness/partial-frame fences; budget limits request05 ONCE/no AUTO06; same-attempt03/no budget reset; corner guard/8s count; servo/health/stop/UART safety");
 }

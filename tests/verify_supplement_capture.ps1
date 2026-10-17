@@ -18,7 +18,8 @@ function Extract-Function([string]$name) {
 $names = @('MissionTask_WrapYaw', 'MissionTask_YawError', 'MissionTask_Abs32', 'MissionTask_ClampFloat',
   'MissionTask_HeadingTurnExpired',
   'MissionTask_ResetVisionControllerState', 'MissionTask_ResetVisionPid', 'MissionTask_ResetS6ControllerState',
-  'MissionTask_ActiveRecoveryLossEvent', 'MissionTask_IsObjectTrackingPhase', 'MissionTask_RedCoordinateIsFresh',
+  'MissionTask_ActiveRecoveryLossEvent', 'MissionTask_DropDuplicateRecoveryEvent',
+  'MissionTask_IsObjectTrackingPhase', 'MissionTask_RedCoordinateIsFresh',
   'MissionTask_UpdateVisionInput', 'MissionTask_GetSelectedObjectId', 'MissionTask_GetCarriedObjectId',
   'MissionTask_UpdateS5CarriedObject', 'MissionTask_EnterS5', 'MissionTask_RunS5WaitSingleGreen',
   'MissionTask_StartS6FromLoad', 'MissionTask_S6IsSupplyTarget', 'MissionTask_S6IsCasualtyTarget',
@@ -83,6 +84,7 @@ static unsigned stops, wide_calls, near_calls, frame_raise_calls, frame_partial_
 static unsigned turn_soft_logs, search_soft_logs;
 static uint16_t frame_lift;
 static uint8_t tx_commands[64], inject06_on_tx;
+static bool inject_e3_on13_tx;
 static uint8_t inject05_result_on_tx, inject05_result_on_stop;
 static bool wide_ok, near_ok, frame_lower_ok, tx_ok, expire_on_tx;
 static uint32_t health_faults;
@@ -106,6 +108,7 @@ HAL_StatusTypeDef MaixCam_SendCommand(uint8_t cmd) {
   if(cmd==0x05) assert(frame_lift==0 && !mission_snapshot.left_target_rpm &&
       !mission_snapshot.right_target_rpm && maixcam_load_recheck_enabled);
   assert(tx_count<sizeof(tx_commands)); tx_commands[tx_count++]=cmd;
+  if(cmd==0x13 && inject_e3_on13_tx) { inject_e3_on13_tx=false;rx(0xE3); }
   if(inject06_on_tx==cmd) {
     inject06_on_tx=0; review_reply(0x06);
   }
@@ -155,7 +158,8 @@ static void MissionTask_EnterState(MissionState state,uint32_t now) {
   mission_snapshot.state=state; mission_snapshot.state_entry_tick=now;
   MaixCam_SetSupplementDirectSearch(supplement_capture_active && !supplement_budget_exhausted &&
       (state==MISSION_STATE_SUPPLEMENT_WIDE_SETTLE || state==MISSION_STATE_SUPPLEMENT_TRACK ||
-       state==MISSION_STATE_SUPPLEMENT_TURN_LEFT || state==MISSION_STATE_SUPPLEMENT_TURN_RIGHT));
+       state==MISSION_STATE_SUPPLEMENT_TURN_LEFT || state==MISSION_STATE_SUPPLEMENT_TURN_RIGHT ||
+       state==MISSION_STATE_SUPPLEMENT_E3_SPIN_CCW));
   MaixCam_SetLoadCheckInterruptEnabled(MissionTask_CanPauseForLoadCheck());
   MaixCam_SetLoadEmptyRecoveryEnabled((state==MISSION_STATE_S5_WAIT_SINGLE_GREEN ||
       state==MISSION_STATE_S6_RECHECK_WAIT_RESULT) && !s5_recheck_resume_safe_tracking &&

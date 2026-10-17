@@ -80,7 +80,7 @@ typedef enum
   MISSION_STATE_S7_SILENT_TURN_BACK,
   MISSION_STATE_S6_REPOSITION_TURN_SAFE,
   MISSION_STATE_S4_E4_GREEN_SPIN_360,
-  MISSION_STATE_S4_E4_RED_SPIN_360,
+  MISSION_STATE_S4_E4_RED_SPIN_360, /* Legacy ID: now red E4 away+L60/R120/L60. */
   MISSION_STATE_S6_FINAL_VERIFY, /* Reserved: retain numeric state IDs. */
   /* Append delivery steps so all existing state IDs remain unchanged. */
   MISSION_STATE_S6_BORDER_LOCATE,
@@ -110,7 +110,9 @@ typedef enum
   MISSION_STATE_S3_E3_TURN_AWAY,
   MISSION_STATE_SUPPLEMENT_WAIT_RECHECK,
   /* Append: retain all existing state IDs and legacy green/red E4 searches. */
-  MISSION_STATE_S4_E4_MATERIAL_SPIN_CW_360
+  MISSION_STATE_S4_E4_MATERIAL_SPIN_CW_360,
+  /* Supplement03's second accepted E3; preserve all previous state IDs. */
+  MISSION_STATE_SUPPLEMENT_E3_SPIN_CCW
 } MissionState;
 
 typedef enum

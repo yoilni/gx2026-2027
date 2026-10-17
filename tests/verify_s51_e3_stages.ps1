@@ -23,7 +23,9 @@ $names = @('MissionTask_WrapYaw', 'MissionTask_YawError', 'MissionTask_Abs32',
   'MissionTask_DropDuplicateRecoveryEvent', 'MissionTask_IsObjectTrackingPhase',
   'MissionTask_RedCoordinateIsFresh', 'MissionTask_UpdateVisionInput',
   'MissionTask_BeginS3Vision', 'MissionTask_HandleS3TargetLost', 'MissionTask_TryStartS3Capture',
-  'MissionTask_StartVisionSearchRecovery', 'MissionTask_RunS3SearchTurn',
+  'MissionTask_StartVisionSearchRecovery', 'MissionTask_RunRedSearchSweep',
+  'MissionTask_RunS7RedE3Recovery',
+  'MissionTask_RunS3SearchTurn',
   'MissionTask_CalculateS6YawPid', 'MissionTask_CalculateS6YawTurn',
   'MissionTask_ResumeRedTracking', 'MissionTask_CompleteS7RedRecovery',
   'MissionTask_CheckRunningHealth', 'MissionTask_HandleRedPriorityRequest')
@@ -31,6 +33,7 @@ $names += @('MissionTask_StartS4Post22Recovery', 'MissionTask_ResumeS3FromPost22
   'MissionTask_StartPost22BlackGreenSearch', 'MissionTask_HandlePost22E3',
   'MissionTask_EscalatePost22Search', 'MissionTask_RunS4Post22Recovery',
   'MissionTask_RunS6TurnToHeading', 'MissionTask_RunS6ExitTurn180',
+  'MissionTask_StartS7Decision', 'MissionTask_ResetSupplement',
   'MissionTask_RunS7Decision', 'MissionTask_DebugYaw',
   'MissionTask_DebugVisionAge', 'MissionTask_DebugAngles',
   'MissionTask_S4FinalFrameLowerSettleMs')
@@ -71,6 +74,7 @@ static unsigned yaw_prints, age_prints, angle_prints;
 static char yaw_log[128], age_log[128], angle_log[128];
 static uint8_t tx_commands[64];
 static uint8_t inject_red_on_tx, inject_red_event, inject_red_frame_kind;
+static uint8_t inject_exit_on_tx;
 static bool frame_down;
 static uint32_t health_faults;
 static void byte(uint8_t b) {
@@ -105,6 +109,11 @@ static HAL_StatusTypeDef Actuator_SetCameraWideView(void) { return HAL_OK; }
 HAL_StatusTypeDef MaixCam_SendCommand(uint8_t cmd) {
   if(cmd==0x03) assert(frame_down);
   assert(tx_count<sizeof(tx_commands)); tx_commands[tx_count++]=cmd;
+  if(cmd==0x03 && inject_exit_on_tx) {
+    uint8_t reply=inject_exit_on_tx; inject_exit_on_tx=0;
+    if(reply==0x04) coords(4);
+    rx(reply);
+  }
   if(inject_red_on_tx==cmd) {
     inject_red_on_tx=0;
     if(inject_red_frame_kind==4) {
@@ -186,6 +195,7 @@ static void setup(uint8_t zone,uint8_t team,int32_t zero) {
   supplement_budget_started=supplement_capture_active=false;
   health_faults=0; tx_count=red_switches=center_entries=0; fake_now=100;
   inject_red_on_tx=inject_red_event=inject_red_frame_kind=0;
+  inject_exit_on_tx=0;
   frame_down=false;
   assert(MissionTask_BeginS3Vision(fake_now)); assert(!s51_e3_recovery_count);
   assert(tx_count==2 && tx_commands[0]==0x51 && tx_commands[1]==0x03);
@@ -220,7 +230,46 @@ static uint32_t align_away(void) {
   assert(mission_snapshot.state_entry_tick==1380);
   return 1380;
 }
+static uint32_t red_phase_with_parser(S7RedE3Phase phase) {
+  setup(3,ROBOT_TEAM_BLUE,12300);
+  s3_target_select_command=0x11; s7_red_recovery_used=false;
+  rx(0xE3); tick(120);
+  uint32_t now=120;
+  if(phase==S7_RED_E3_FORWARD) return now;
+  now=920; tick(now);
+  if(phase==S7_RED_E3_TURN_LEFT) return now;
+  mission_snapshot.yaw_cdeg=s3_search_yaw_target_cdeg; now=940; tick(now);
+  if(phase==S7_RED_E3_HOLD_LEFT) return now;
+  now=1440; tick(now);
+  if(phase==S7_RED_E3_TURN_RIGHT) return now;
+  mission_snapshot.yaw_cdeg=s3_search_yaw_target_cdeg; now=1460; tick(now);
+  if(phase==S7_RED_E3_HOLD_RIGHT) return now;
+  now=1960; tick(now);
+  assert(phase==S7_RED_E3_TURN_HOME);
+  return now;
+}
+static void red_sweep_parser_cases(void) {
+  for(unsigned p=S7_RED_E3_FORWARD;p<=S7_RED_E3_TURN_HOME;++p) {
+    uint32_t now=red_phase_with_parser((S7RedE3Phase)p);
+    assert(s7_red_e3_phase==(S7RedE3Phase)p);
+    uint32_t entry=mission_snapshot.state_entry_tick;
+    rx(0xE3); tick(now+20);
+    assert(s7_red_e3_phase==(S7RedE3Phase)p && mission_snapshot.state_entry_tick==entry);
+    coords(6); tick(now+40); assert(mission_snapshot.state!=MISSION_STATE_S3_TRACK_GREEN);
+    coords(4); tick(now+60);
+    assert(mission_snapshot.state==MISSION_STATE_S3_TRACK_GREEN && s7_red_recovery_used && tx_count==2);
+    now=red_phase_with_parser((S7RedE3Phase)p);
+    coords(4); tick(now+501);
+    assert(mission_snapshot.state!=MISSION_STATE_S3_TRACK_GREEN);
+    coords(4); tick(now+521);
+    assert(mission_snapshot.state==MISSION_STATE_S3_TRACK_GREEN && tx_count==2);
+    now=red_phase_with_parser((S7RedE3Phase)p);
+    health_faults=MISSION_FAULT_IMU; tick(now+20);
+    assert(mission_snapshot.state==MISSION_STATE_FAULT && !mission_snapshot.left_target_rpm);
+  }
+}
 int main(void) {
+  red_sweep_parser_cases();
   verify_red_switch_event_fence();
   verify_debug_period();
   verify_exit180_events();

@@ -23,13 +23,14 @@ static void verify_vision_approach(void) {
     MISSION_STATE_SUPPLEMENT_TRACK};
   const uint8_t refs[] = {0x03,0x04,0x24,0x03,0x04,0x24};
   for (unsigned i=0; i<sizeof(refs); ++i) {
+    int near_edge=40, near33=49, near50=57, near80=70;
     approach_setup(states[i],refs[i]);
     assert(approach_frame(-12)==0);
-    assert(approach_frame(-13)==20);
-    assert(approach_frame(-33)==26);
-    assert(approach_frame(-50)==31);
-    assert(approach_frame(-80)==40);
-    int previous=40;
+    assert(approach_frame(-13)==near_edge);
+    assert(approach_frame(-33)==near33);
+    assert(approach_frame(-50)==near50);
+    assert(approach_frame(-80)==near80);
+    int previous=near80;
     for (int y=81; y<=448; ++y) {
       int speed=approach_frame(-y);
       assert(speed>=previous && speed<=150);
@@ -45,7 +46,7 @@ static void verify_vision_approach(void) {
     assert(approach_frame(448)==-30);
     assert(approach_frame(13)==-20);
     assert(approach_frame(-13)==0);
-    assert(approach_frame(-13)==20);
+    assert(approach_frame(-13)==near_edge);
     //A zero/error-in-tolerance frame interrupts the candidate, not the
     //accepted direction; forward -> zero -> backward still needs two frames.
     assert(approach_frame(13)==0);
@@ -57,7 +58,7 @@ static void verify_vision_approach(void) {
     assert(approach_frame(-50)==0);
     mission_snapshot.target_id=6;
     assert(approach_frame(-50)==0);
-    assert(approach_frame(-50)==31);
+    assert(approach_frame(-50)==near50);
     //A real gap above the500ms coordinate lifetime starts confirmation over.
     assert(approach_frame(50)==0);
     fake_now+=501;
@@ -69,13 +70,13 @@ static void verify_vision_approach(void) {
     assert(!vision_forward_pending_frames);
     mission_snapshot.vision_target_valid=true;
     assert(approach_frame(-50)==0);
-    assert(approach_frame(-50)==31);
+    assert(approach_frame(-50)==near50);
   }
   //Replay the large fore/aft oscillation seen in the real log, with the
   //actual03 caller (not just the helper). Positive -> negative is held at0.
   approach_setup(MISSION_STATE_S3_TRACK_GREEN,0x03);
   const int16_t errors[]={-128,33,-132,0,50,50};
-  const int expected[]={72,0,75,0,0,-30};
+  const int expected[]={90,0,92,0,0,-30};
   for (unsigned i=0; i<sizeof(errors)/sizeof(errors[0]); ++i) {
     fake_now+=100; ++mission_snapshot.target_sequence;
     mission_snapshot.target_age_ms=0;
@@ -86,22 +87,23 @@ static void verify_vision_approach(void) {
   }
   //500ms expiry and progressive coordinate-age fade cannot reapply a floor.
   approach_setup(MISSION_STATE_S3_TRACK_GREEN,0x03);
-  assert(approach_frame(-50)==31);
+  assert(approach_frame(-50)==57);
   MissionTask_RunS3Track(fake_now);
-  assert(mission_snapshot.left_target_rpm==31);
+  assert(mission_snapshot.left_target_rpm==57);
   fake_now+=375; mission_snapshot.target_age_ms=375;
   MissionTask_RunS3Track(fake_now);
-  assert(mission_snapshot.left_target_rpm==15);
+  assert(mission_snapshot.left_target_rpm==28);
   fake_now+=125; mission_snapshot.target_age_ms=500;
   MissionTask_RunS3Track(fake_now);
   assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
-  //All04/24 and supplement callers use the same near approach profile.
+  //Actual04/24 and supplementary references all use the faster approach.
   for (unsigned i=1;i<sizeof(refs);++i) {
+    int near50=57;
     approach_setup(states[i],refs[i]);
-    assert(approach_frame(-50)==31);
+    assert(approach_frame(-50)==near50);
     bool reached;
     assert(MissionTask_CommandS4VisionTracking(fake_now,&reached));
-    assert(mission_snapshot.left_target_rpm==31 && mission_snapshot.right_target_rpm==31);
+    assert(mission_snapshot.left_target_rpm==near50 && mission_snapshot.right_target_rpm==near50);
     assert(approach_frame(50)==0);
     assert(MissionTask_CommandS4VisionTracking(fake_now,&reached));
     assert(!mission_snapshot.left_target_rpm);
@@ -123,12 +125,43 @@ static void verify_vision_approach(void) {
   approach_setup(MISSION_STATE_S3_TRACK_GREEN,0x03);
   mission_snapshot.target_sequence=UINT32_MAX-1U;
   fake_now=UINT32_MAX-150U;
-  assert(approach_frame(-50)==31);
+  assert(approach_frame(-50)==57);
   assert(approach_frame(50)==0);
   assert(approach_frame(50)==-30);
   //06 is explicitly outside the new object approach/reversal guard.
   approach_setup(MISSION_STATE_S6_TRACK_SAFE_ZONE,0);
   assert(approach_frame(-50)==100);
   assert(approach_frame(50)==-100);
-  puts("PASS:03/04/24/supplement near approach, monotonic far transition, fresh-frame reversal, reverse cap, actual wheel callers, deadband/freshness/wrap/fades;06 unchanged");
+  //Final wheel commands must not inherit04's previous70/90 caps.
+  for(unsigned i=0;i<sizeof(refs);++i) if(refs[i]!=0x24) {
+    approach_setup(states[i],refs[i]);
+    assert(approach_frame(-200)==120);
+    assert(approach_frame(-448)==150);
+    bool reached;
+    if(i==0) MissionTask_RunS3Track(fake_now);
+    else assert(MissionTask_CommandS4VisionTracking(fake_now,&reached));
+    assert(mission_snapshot.left_target_rpm==150 && mission_snapshot.right_target_rpm==150);
+    mission_snapshot.vision_x_error_px=300;
+    if(i==0) MissionTask_RunS3Track(fake_now+20);
+    else assert(MissionTask_CommandS4VisionTracking(fake_now+20,&reached));
+    assert(mission_snapshot.left_target_rpm<=150 && mission_snapshot.right_target_rpm<=150);
+    assert(mission_snapshot.left_target_rpm>90 && mission_snapshot.right_target_rpm>90);
+  }
+  //24's higher near endpoint never slopes back to the old50rpm far floor.
+  for(unsigned i=0;i<sizeof(refs);++i) if(refs[i]==0x24) {
+    approach_setup(states[i],refs[i]);
+    assert(approach_frame(-80)==70);
+    assert(approach_frame(-81)==70);
+    assert(approach_frame(-120)==70);
+    assert(approach_frame(-200)==70);
+    assert(approach_frame(-448)==120);
+    bool reached;
+    assert(MissionTask_CommandS4VisionTracking(fake_now,&reached));
+    assert(mission_snapshot.left_target_rpm==120 && mission_snapshot.right_target_rpm==120);
+    mission_snapshot.vision_x_error_px=300;
+    assert(MissionTask_CommandS4VisionTracking(fake_now+20,&reached));
+    assert(mission_snapshot.left_target_rpm<=120 && mission_snapshot.right_target_rpm<=120);
+    assert(approach_frame(50)==0 && approach_frame(50)==-30);
+  }
+  puts("PASS:03/04/24/supplement near40..70 through actual wheel callers;03/04 far120..150,24 monotonic70 floor/120 cap, old reverse profile/cap and fresh-frame confirmation, deadband/freshness/wrap/fades;06 unchanged");
 }

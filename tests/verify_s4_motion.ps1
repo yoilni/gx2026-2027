@@ -88,12 +88,15 @@ static void verify(bool right) {
   uint32_t old_reverse = (uint32_t)(old_push * 90.0f / 120.0f * return_fraction + 0.5f);
   double old_area = 0, old_turn = 0, area = 0, turn = 0, reverse_area = 0;
   double old_reverse_area = 0;
+  double left_area = 0, right_area = 0, reverse_left_area = 0, reverse_right_area = 0;
+  double reverse_turn = 0;
   double peak_forward = 0, peak_reverse = 0;
   int16_t left, r;
   assert(ROBOT_S4_CORNER_TRAVEL_PERCENT == 100);
+  assert(ROBOT_S4_LEFT_REVERSE_DISTANCE_PERCENT == 100);
   assert(push == old_push && reverse == old_reverse);
   assert(push == (right ? 643U : 1014U));
-  assert(reverse == (right ? 482U : 608U));
+  assert(reverse == (right ? 482U : 761U));
   assert(ROBOT_S4_CORNER_DIFF_EARLY_RPM == 30 &&
          ROBOT_S4_CORNER_DIFF_MIDDLE_RPM == 38 &&
          ROBOT_S4_CORNER_DIFF_LATE_RPM == 45);
@@ -118,6 +121,8 @@ static void verify(bool right) {
     assert(right ? left >= r : r >= left);
     if (t == 0 || t == push) assert(left == 0 && r == 0);
     area += (left + r) * 0.5;
+    left_area += left;
+    right_area += r;
     turn += right ? left - r : r - left;
     if ((left + r) * 0.5 > peak_forward) peak_forward = (left + r) * 0.5;
   }
@@ -130,11 +135,17 @@ static void verify(bool right) {
     if (t == 0 || t == reverse) assert(wheel_left == 0 && wheel_right == 0);
     double speed = -(wheel_left + wheel_right) * 0.5;
     reverse_area += speed;
+    reverse_left_area -= wheel_left;
+    reverse_right_area -= wheel_right;
+    reverse_turn += right ? wheel_right - wheel_left : wheel_left - wheel_right;
     if (speed > peak_reverse) peak_reverse = speed;
   }
   assert(relative_error(area, old_area) < 0.01);
   assert(relative_error(reverse_area, old_reverse_area) < 0.01);
   assert(relative_error(reverse_area, area * return_fraction) < 0.01);
+  assert(relative_error(reverse_left_area, left_area) < 0.01);
+  assert(relative_error(reverse_right_area, right_area) < 0.01);
+  assert(relative_error(reverse_turn, turn) < 0.02);
   assert(peak_forward >= 89.0 && peak_reverse >= 119.0);
   double curvature_ratio = (turn / area) / (old_turn / old_area);
   assert(right ? curvature_ratio > 0.90 && curvature_ratio < 0.96
