@@ -15,6 +15,15 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Motion/Vision/src/vision_motion.c
     Motion/WheelSpeed/src/M2006_PID.c
     Motion/WheelSpeed/src/M2006_Speed.c
+    Flows/Common/src/flow_motion.c
+    Flows/Delivery/src/delivery_flow.c
+    Flows/BarShift/src/bar_shift_flow.c
+    Flows/Obstacle/src/obstacle_flow.c
+    Flows/Reposition/src/reposition_flow.c
+    Flows/Arrange/src/arrange_flow.c
+    Flows/Capture/src/capture_flow.c
+    Flows/Departure/src/departure_flow.c
+    Flows/Recovery/src/recovery_flow.c
     Runtime/Diagnostics/src/imu_diagnostics_adapter.c
 )
 
@@ -30,4 +39,13 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Motion/Servo/inc
     ${CMAKE_CURRENT_SOURCE_DIR}/Motion/Vision/inc
     ${CMAKE_CURRENT_SOURCE_DIR}/Motion/WheelSpeed/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Flows/Common/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Flows/Delivery/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Flows/BarShift/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Flows/Obstacle/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Flows/Reposition/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Flows/Arrange/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Flows/Capture/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Flows/Departure/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Flows/Recovery/inc
 )

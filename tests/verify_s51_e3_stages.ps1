@@ -32,13 +32,14 @@ $names = @('MissionTask_S7MaterialOnly', 'MissionTask_WrapYaw', 'MissionTask_Yaw
 $names += @('MissionTask_StartS4Post22Recovery', 'MissionTask_ResumeS3FromPost22Search',
   'MissionTask_StartPost22BlackGreenSearch', 'MissionTask_HandlePost22E3',
   'MissionTask_EscalatePost22Search', 'MissionTask_RunS4Post22Recovery',
+  'MissionTask_RecoveryScanLeg',
   'MissionTask_RunS6TurnToHeading', 'MissionTask_RunS6ExitTurn180',
   'MissionTask_StartS7Decision', 'MissionTask_ResetSupplement',
   'MissionTask_RunS7Decision', 'MissionTask_DebugYaw',
   'MissionTask_DebugVisionAge', 'MissionTask_DebugAngles')
 $names += @('MissionTask_GetSelectedObjectId', 'MissionTask_GetCarriedObjectId', 'MissionTask_S6IsSupplyTarget',
   'MissionTask_ResetS6BorderProgress', 'MissionTask_StopS6DeliveryBafflePwm',
-  'MissionTask_RunS6BorderLocate', 'MissionTask_RunS6FinalReverse',
+  'MissionTask_RunS6BorderLocate', 'MissionTask_CommandDeliveryStraight', 'MissionTask_StepDelivery', 'MissionTask_RunS6FinalReverse',
   'MissionTask_SetS1Phase', 'MissionTask_DecodeStartZone', 'MissionTask_StartS1',
   'MissionTask_ProcessEvents')
 $functions = @($names | ForEach-Object { Extract-Function $_ })
@@ -64,6 +65,7 @@ $preamble = @'
 #include "chassis_motion.h"
 #include "heading_control.h"
 #include "chassis_actions.h"
+#include "flow_modules.h"
 #include "vision_motion.h"
 #include "robot_config.h"
 #include "maixcam_task.h"
@@ -173,7 +175,7 @@ HAL_StatusTypeDef MaixCam_SendCommand(uint8_t cmd) {
 }
 static void MissionTask_EnterState(MissionState s,uint32_t t) {
   if(mission_snapshot.state==s) return;
-  if(s6_border_baffle_hold_active && s!=MISSION_STATE_S6_BORDER_BACKOFF &&
+  if(delivery_flow.baffle_held && s!=MISSION_STATE_S6_BORDER_BACKOFF &&
       s!=MISSION_STATE_S6_FINAL_PUSH && !MissionTask_StopS6DeliveryBafflePwm()) s=MISSION_STATE_FAULT;
   mission_snapshot.state=s; mission_snapshot.state_entry_tick=t;
   if(s==MISSION_STATE_S6_BORDER_LOCATE || s==MISSION_STATE_S6_FINAL_PUSH) MissionTask_ResetS6BorderProgress(t);
@@ -456,7 +458,8 @@ $greenE3Cases = Get-Content (Join-Path $PSScriptRoot 'host/s3_green_e3_cases.c')
 $testSource = Join-Path $outputDir 'verify_s51_e3_stages.c'
 [IO.File]::WriteAllText($testSource,$preamble+"`n"+$eventDefines+"`n"+$globals+"`n"+$prototypes+$parserInclude+$stubs+"`n"+($functions -join "`n")+"`n"+$post22Wait+"`n"+$cases+"`n"+$post22Cases+"`n"+$exit180Cases+"`n"+$debugCases+"`n"+$redFenceCases+"`n"+$materialTripCases+"`n"+$greenE3Cases,[Text.UTF8Encoding]::new($false))
 $testExe = Join-Path $outputDir 'verify_s51_e3_stages.exe'
-& $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" "-I$projectRoot/User/Hardware/Serial/inc" "-I$projectRoot/User/Motion/Chassis/inc" $testSource (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') "-I$projectRoot/User/Motion/Vision/inc" (Join-Path $projectRoot 'User/Motion/Chassis/src/chassis_actions.c') (Join-Path $projectRoot 'User/Motion/Vision/src/vision_motion.c') -o $testExe
+. (Join-Path $PSScriptRoot 'host/flow_build.ps1') $projectRoot
+& $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" "-I$projectRoot/User/Hardware/Serial/inc" "-I$projectRoot/User/Motion/Chassis/inc" $testSource (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') "-I$projectRoot/User/Motion/Vision/inc" (Join-Path $projectRoot 'User/Motion/Chassis/src/chassis_actions.c') (Join-Path $projectRoot 'User/Motion/Vision/src/vision_motion.c') @flowBuildArgs -o $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host build failed' }
 & $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host assertions failed' }

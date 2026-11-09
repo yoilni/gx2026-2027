@@ -16,10 +16,7 @@ function Extract-Function([string]$name) {
   }
   $source.Substring($match.Index, $cursor - $match.Index)
 }
-$names = @('MissionTask_S4SmoothStep', 'MissionTask_S4MotionScale',
-  'MissionTask_CalculateS4CornerProfile', 'MissionTask_S4ScalePushDuration',
-  'MissionTask_S4PushDuration', 'MissionTask_S4ReverseDuration',
-  'MissionTask_CommandS4CornerReverse')
+$names = @('MissionTask_S4ReverseDuration', 'MissionTask_CommandS4CornerReverse')
 $functions = @($names | ForEach-Object { Extract-Function $_ })
 $preamble = @'
 #include <assert.h>
@@ -28,6 +25,7 @@ $preamble = @'
 #include <stdarg.h>
 #include "mission_task.h"
 #include "chassis_actions.h"
+#include "arrange_flow.h"
 #include "robot_config.h"
 static MissionSnapshot mission_snapshot;
 static uint32_t s4_next_debug_tick;
@@ -52,18 +50,18 @@ static uint32_t baseline_duration(bool right) {
 $baseline = @'
 static void baseline_profile(uint32_t elapsed, uint32_t duration, bool right,
                              int16_t *left, int16_t *right_wheel) {
-  float scale = MissionTask_S4MotionScale(elapsed, duration, ROBOT_S4_PUSH_RAMP_MS);
+  float scale = ChassisMotion_RampScale(elapsed, duration, ROBOT_S4_PUSH_RAMP_MS);
   float speed = 90.0f;
   if (!right) {
     float blend = elapsed <= ROBOT_S4_LEFT_CORNER_INITIAL_MS ? 0.0f :
-        MissionTask_S4SmoothStep((float)(elapsed - ROBOT_S4_LEFT_CORNER_INITIAL_MS) /
+        ChassisMotion_SmoothStep((float)(elapsed - ROBOT_S4_LEFT_CORNER_INITIAL_MS) /
                                 ROBOT_S4_LEFT_SPEED_BLEND_MS);
     speed = 80.0f + 10.0f * blend;
   }
   float progress = (float)elapsed / duration;
-  float middle = MissionTask_S4SmoothStep((progress - ROBOT_S4_CORNER_DIFF_MIDDLE_BEGIN) /
+  float middle = ChassisMotion_SmoothStep((progress - ROBOT_S4_CORNER_DIFF_MIDDLE_BEGIN) /
       (ROBOT_S4_CORNER_DIFF_MIDDLE_END - ROBOT_S4_CORNER_DIFF_MIDDLE_BEGIN));
-  float late = MissionTask_S4SmoothStep((progress - ROBOT_S4_CORNER_DIFF_LATE_BEGIN) /
+  float late = ChassisMotion_SmoothStep((progress - ROBOT_S4_CORNER_DIFF_LATE_BEGIN) /
       (ROBOT_S4_CORNER_DIFF_LATE_END - ROBOT_S4_CORNER_DIFF_LATE_BEGIN));
   float early_diff = right ? 33.0f : 11.0f;
   float middle_diff = right ? 41.0f : 12.0f;
@@ -83,7 +81,7 @@ static double relative_error(double value, double baseline) {
 }
 static void verify(bool right) {
   uint32_t old_push = baseline_duration(right);
-  uint32_t push = MissionTask_S4PushDuration(right);
+  uint32_t push = ArrangeFlow_CornerPushMs(right);
   uint32_t reverse = MissionTask_S4ReverseDuration(right);
   float return_fraction = right ? 1.0f : ROBOT_S4_LEFT_REVERSE_DISTANCE_PERCENT / 100.0f;
   uint32_t old_reverse = (uint32_t)(old_push * 90.0f / 120.0f * return_fraction + 0.5f);
@@ -117,7 +115,7 @@ static void verify(bool right) {
                          (int16_t)(r * speed_scale + 0.5f)) * 0.5;
   }
   for (uint32_t t = 0; t <= push; ++t) {
-    MissionTask_CalculateS4CornerProfile(t, push, right, &left, &r);
+    ArrangeFlow_CornerRpm(t, push, right, &left, &r);
     assert(left >= 0 && r >= 0);
     assert(right ? left >= r : r >= left);
     if (t == 0 || t == push) assert(left == 0 && r == 0);
@@ -164,11 +162,13 @@ int main(void) {
 '@
 $code = $preamble + "`n" + ($functions -join "`n") + "`n" + $baseline + "`n" + $cases
 $executable = Join-Path $outputDir 's4_motion_cases.exe'
+. (Join-Path $PSScriptRoot 'host/flow_build.ps1') $projectRoot
 $code | & $Compiler '-std=c11' '-Wall' '-Wextra' '-Werror' '-x' 'c' '-' `
     (Join-Path $projectRoot 'User/Motion/Chassis/src/chassis_actions.c') `
     (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') `
     '-I' (Join-Path $projectRoot 'User/Motion/Chassis/inc') `
-    '-I' (Join-Path $projectRoot 'Task') '-o' $executable '-lm'
+    '-I' (Join-Path $PSScriptRoot 'host') `
+    '-I' (Join-Path $projectRoot 'Task') @flowBuildArgs '-o' $executable '-lm'
 if ($LASTEXITCODE -ne 0) { throw 'S4 motion host build failed' }
 & $executable
 if ($LASTEXITCODE -ne 0) { throw 'S4 motion distance/curve checks failed' }

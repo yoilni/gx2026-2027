@@ -33,7 +33,7 @@ $names = @('MissionTask_GetVisionMotionProfile', 'MissionTask_WrapYaw', 'Mission
   'MissionTask_CalculateS6YawPid', 'MissionTask_CalculateS6YawTurn', 'MissionTask_RunS6TurnToHeading',
   'MissionTask_CommandS6Straight', 'MissionTask_CalculateS2YawCorrection', 'MissionTask_StartS6ObstacleAvoidance',
   'MissionTask_ResetS6BorderProgress',
-  'MissionTask_RunS6BorderLocate', 'MissionTask_RunS6FinalReverse', 'MissionTask_S7MaterialOnly',
+  'MissionTask_RunS6BorderLocate', 'MissionTask_CommandDeliveryStraight', 'MissionTask_StepDelivery', 'MissionTask_RunS6FinalReverse', 'MissionTask_S7MaterialOnly',
   'MissionTask_RunS6ObstacleAvoidance', 'MissionTask_SetTrackingTargets', 'MissionTask_VisionAgeScale',
   'MissionTask_SetVisionTrackingTargets', 'MissionTask_GuardVisionForward', 'MissionTask_CalculateVisionForward', 'MissionTask_CalculateVisionTurn',
   'MissionTask_IsObjectTrackingPhase', 'MissionTask_RedCoordinateIsFresh', 'MissionTask_UpdateVisionInput',
@@ -60,6 +60,7 @@ $preamble = @'
 #include "chassis_motion.h"
 #include "heading_control.h"
 #include "chassis_actions.h"
+#include "flow_modules.h"
 #include "vision_motion.h"
 #include "robot_config.h"
 #include "maixcam_task.h"
@@ -184,7 +185,7 @@ static void MissionTask_SetWheelTargets(int16_t left,int16_t right) {
 static void MissionTask_EnterState(MissionState state,uint32_t now) {
   if(mission_snapshot.state==state) return;
   bool keep=state==MISSION_STATE_S6_BORDER_BACKOFF || state==MISSION_STATE_S6_FINAL_PUSH;
-  if(((s6_border_baffle_hold_active && !keep) || state==MISSION_STATE_FAULT || state==MISSION_STATE_STOPPED ||
+  if(((delivery_flow.baffle_held && !keep) || state==MISSION_STATE_FAULT || state==MISSION_STATE_STOPPED ||
       state==MISSION_STATE_WAIT_START || state==MISSION_STATE_S6_RECHECK_WAIT_ACK ||
       state==MISSION_STATE_S6_RECHECK_WAIT_RESULT) &&
       !MissionTask_StopS6DeliveryBafflePwm()) state=MISSION_STATE_FAULT;
@@ -220,7 +221,7 @@ static void setup(uint8_t zone,uint8_t team,uint8_t cargo,int32_t zero,int32_t f
   departure_claw_fail=false;
   departure_servo_ok=true;release_baffle_fail=false;
   baffle_stop_calls=0;baffle_stop_fail=false;baffle_pwm_active=false;
-  s6_found_baffle_pwm_active=s6_border_baffle_hold_active=false;
+  s6_found_baffle_pwm_active=delivery_flow.baffle_held=false;
   s7_delivery_counted=false;
   assert(MaixCam_Init(&uart)==HAL_OK);++uart_inits;
   memset(&mission_snapshot,0,sizeof(mission_snapshot));
@@ -645,7 +646,7 @@ static void verify_16_baffle_pulse(void) {
   s6_push_yaw_target_cdeg=mission_snapshot.yaw_cdeg;
   MissionTask_EnterState(MISSION_STATE_S6_BORDER_LOCATE,140);
   MissionTask_RunS6BorderLocate(140);
-  assert(s6_border_baffle_hold_active && !s6_found_baffle_pwm_active && baffle_pwm_active);
+  assert(delivery_flow.baffle_held && !s6_found_baffle_pwm_active && baffle_pwm_active);
   tick(270,false);MissionTask_RunS6BorderLocate(270);
   assert(baffle_pwm_active && !baffle_stop_calls && !departure_claw_calls && departure_claw==ROBOT_CLAW_CLOSED_DEG);
   assert(mission_snapshot.left_target_rpm==70 && mission_snapshot.right_target_rpm==70);
@@ -716,7 +717,7 @@ static void verify_final26_motion_parameters(void) {
     assert(mission_snapshot.state==MISSION_STATE_S6_FINAL_REVERSE);
     assert(departure_claw==opening && departure_claw_calls==1);
     assert(departure_baffle==ROBOT_BAFFLE_UP_DEG && departure_baffle_calls==3 && baffle_pwm_active);
-    assert(!baffle_stop_calls && !s6_border_baffle_hold_active);
+    assert(!baffle_stop_calls && !delivery_flow.baffle_held);
     MissionTask_RunS6FinalReverse(reverse_start);
     assert(mission_snapshot.left_target_rpm==-100 && mission_snapshot.right_target_rpm==-100);
     MissionTask_RunS6FinalReverse(turn_start-1U);
@@ -799,41 +800,41 @@ static void verify_border_effective_advance(void) {
     const int32_t perpendicular=MissionTask_WrapYaw(100L+sign*9000L);
     MissionTask_EnterState(MISSION_STATE_S6_BORDER_LOCATE,start);
     mission_snapshot.yaw_cdeg=off;MissionTask_RunS6BorderLocate(start);
-    assert(s6_border_advancing && !s6_border_forward_ms && !departure_claw_calls && departure_claw==ROBOT_CLAW_CLOSED_DEG);
+    assert(delivery_flow.advancing && !delivery_flow.forward_ms && !departure_claw_calls && departure_claw==ROBOT_CLAW_CLOSED_DEG);
     assert(mission_snapshot.vision_turn_rpm*sign*ROBOT_YAW_LEFT_SIGN>0);
     assert(mission_snapshot.left_target_rpm+mission_snapshot.right_target_rpm==140);
     assert(baffle_pwm_active && departure_baffle_calls==1 && !baffle_stop_calls);
     mission_snapshot.yaw_cdeg=boundary;MissionTask_RunS6BorderLocate(start+300U);
-    assert(s6_border_advancing && s6_border_forward_ms==300U);
+    assert(delivery_flow.advancing && delivery_flow.forward_ms==300U);
     assert(baffle_pwm_active && departure_baffle_calls==1 && !baffle_stop_calls);
     mission_snapshot.yaw_cdeg=perpendicular;MissionTask_RunS6BorderLocate(start+600U);
-    assert(s6_border_forward_ms==600U && !s6_border_advancing && mission_snapshot.vision_turn_rpm!=0);
+    assert(delivery_flow.forward_ms==600U && !delivery_flow.advancing && mission_snapshot.vision_turn_rpm!=0);
     assert(baffle_pwm_active && !baffle_stop_calls);
     MissionTask_RunS6BorderLocate(start+800U);
     assert(mission_snapshot.state==MISSION_STATE_S6_BORDER_LOCATE && !departure_claw_calls && departure_baffle_calls==1);
-    assert(s6_border_forward_ms==600U && !mission_snapshot.vision_forward_rpm);
+    assert(delivery_flow.forward_ms==600U && !mission_snapshot.vision_forward_rpm);
     mission_snapshot.yaw_cdeg=100L;MissionTask_RunS6BorderLocate(start+1000U);
     uint32_t first_end=start+1000U+ROBOT_S6_BORDER_LOCATE_MS-600U;
     MissionTask_RunS6BorderLocate(first_end-1U);
-    assert(s6_border_forward_ms==749U && s6_border_advancing && !s7_delivery_counted);
+    assert(delivery_flow.forward_ms==749U && delivery_flow.advancing && !s7_delivery_counted);
     mission_snapshot.yaw_cdeg=off;MissionTask_RunS6BorderLocate(first_end);
-    assert(s6_border_forward_ms==750U && !s6_border_advancing && !s7_delivery_counted);
+    assert(delivery_flow.forward_ms==750U && !delivery_flow.advancing && !s7_delivery_counted);
     assert(!departure_claw_calls);
     assert(mission_snapshot.state==MISSION_STATE_S6_BORDER_LOCATE && baffle_pwm_active && !baffle_stop_calls);
     mission_snapshot.yaw_cdeg=boundary;MissionTask_RunS6BorderLocate(first_end+100U);
     assert(mission_snapshot.state==MISSION_STATE_S6_BORDER_BACKOFF && departure_claw_calls==1);
     uint32_t push=first_end+100U+ROBOT_S6_BORDER_BACKOFF_MS;
     mission_snapshot.yaw_cdeg=off;MissionTask_RunS6BorderLocate(push);
-    assert(mission_snapshot.state==MISSION_STATE_S6_FINAL_PUSH && s6_border_advancing && !s6_border_forward_ms);
+    assert(mission_snapshot.state==MISSION_STATE_S6_FINAL_PUSH && delivery_flow.advancing && !delivery_flow.forward_ms);
     assert(mission_snapshot.vision_forward_rpm==70 && mission_snapshot.vision_turn_rpm*sign*ROBOT_YAW_LEFT_SIGN>0);
     assert(departure_baffle==ROBOT_S6_PUSH_BAFFLE_DEG && departure_claw_calls==1 && baffle_pwm_active);
     MissionTask_RunS6BorderLocate(push+699U);
-    assert(s6_border_forward_ms==699U && !s7_delivery_counted);
+    assert(delivery_flow.forward_ms==699U && !s7_delivery_counted);
     MissionTask_RunS6BorderLocate(push+700U);
-    assert(mission_snapshot.state==MISSION_STATE_S6_FINAL_PUSH && s6_border_forward_ms==700U);
+    assert(mission_snapshot.state==MISSION_STATE_S6_FINAL_PUSH && delivery_flow.forward_ms==700U);
     assert(!mission_snapshot.vision_forward_rpm && mission_snapshot.vision_turn_rpm!=0 && !s7_delivery_counted);
     mission_snapshot.yaw_cdeg=boundary;MissionTask_RunS6BorderLocate(push+800U);
-    assert(mission_snapshot.state==MISSION_STATE_S6_FINAL_REVERSE && s6_border_forward_ms==700U);
+    assert(mission_snapshot.state==MISSION_STATE_S6_FINAL_REVERSE && delivery_flow.forward_ms==700U);
     assert(departure_claw_calls==1 && departure_baffle_calls==3 && departure_baffle==ROBOT_BAFFLE_UP_DEG);
   }
   for(unsigned leg=0;leg<2;++leg) for(unsigned failure=0;failure<3;++failure) {
@@ -1301,7 +1302,8 @@ $cases = $cases.Replace('int main(void) {',
 $testSource = Join-Path $outputDir 'verify_s6_corner.c'
 [IO.File]::WriteAllText($testSource,$preamble+$parserInclude+$globals+"`n"+$ruleTypes+"`n"+$prototypes+"`n"+$stubs+"`n"+($functions -join "`n")+"`n"+$cases,[Text.UTF8Encoding]::new($false))
 $testExe = Join-Path $outputDir 'verify_s6_corner.exe'
-& $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" "-I$projectRoot/User/Hardware/Serial/inc" "-I$projectRoot/User/Motion/Chassis/inc" $testSource (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') "-I$projectRoot/User/Motion/Vision/inc" (Join-Path $projectRoot 'User/Motion/Chassis/src/chassis_actions.c') (Join-Path $projectRoot 'User/Motion/Vision/src/vision_motion.c') -o $testExe
+. (Join-Path $PSScriptRoot 'host/flow_build.ps1') $projectRoot
+& $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" "-I$projectRoot/User/Hardware/Serial/inc" "-I$projectRoot/User/Motion/Chassis/inc" $testSource (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') "-I$projectRoot/User/Motion/Vision/inc" (Join-Path $projectRoot 'User/Motion/Chassis/src/chassis_actions.c') (Join-Path $projectRoot 'User/Motion/Vision/src/vision_motion.c') @flowBuildArgs -o $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host build failed' }
 & $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host assertions failed' }

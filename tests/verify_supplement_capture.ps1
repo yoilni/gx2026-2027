@@ -50,6 +50,7 @@ $names += @('MissionTask_RunS3Track', 'MissionTask_StartS3Align',
   'MissionTask_BeginS3Vision', 'MissionTask_RunS3LowerFrame')
 $names += @('MissionTask_RecordInitialGreenPush', 'MissionTask_RecoverS4FineArrange', 'MissionTask_HandleS4FineArrangeRequest',
   'MissionTask_CompleteS4FineArrange', 'MissionTask_RunS4FineArrange',
+  'MissionTask_RecoveryScanLeg',
   'MissionTask_StartS4PushTrial', 'MissionTask_StartS4TrackState', 'MissionTask_TryS4ArrangeEvent',
   'MissionTask_StartS4GreenScatter')
 $names += @('MissionTask_StartS4Post22Recovery', 'MissionTask_ResumeS3FromPost22Search',
@@ -90,6 +91,7 @@ $preamble = @'
 #include "chassis_motion.h"
 #include "heading_control.h"
 #include "chassis_actions.h"
+#include "flow_modules.h"
 #include "vision_motion.h"
 #include "robot_config.h"
 #include "maixcam_task.h"
@@ -333,7 +335,8 @@ $parserInclude = "`n#define MaixCam_SendCommand Parser_SendCommand`n#include `"$
 $testSource = Join-Path $outputDir 'verify_supplement_capture.c'
 [IO.File]::WriteAllText($testSource, $preamble+$parserInclude+$globals+"`n"+$ruleTypes+"`n"+$prototypes+"`n"+$stubs+"`n"+($functions -join "`n")+"`n"+$normalS4+"`n"+$cases,[Text.UTF8Encoding]::new($false))
 $testExe = Join-Path $outputDir 'verify_supplement_capture.exe'
-& $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" "-I$projectRoot/User/Hardware/Serial/inc" "-I$projectRoot/User/Motion/Chassis/inc" $testSource (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') "-I$projectRoot/User/Motion/Vision/inc" (Join-Path $projectRoot 'User/Motion/Chassis/src/chassis_actions.c') (Join-Path $projectRoot 'User/Motion/Vision/src/vision_motion.c') -o $testExe
+. (Join-Path $PSScriptRoot 'host/flow_build.ps1') $projectRoot
+& $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" "-I$projectRoot/User/Hardware/Serial/inc" "-I$projectRoot/User/Motion/Chassis/inc" $testSource (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') "-I$projectRoot/User/Motion/Vision/inc" (Join-Path $projectRoot 'User/Motion/Chassis/src/chassis_actions.c') (Join-Path $projectRoot 'User/Motion/Vision/src/vision_motion.c') @flowBuildArgs -o $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host build failed' }
 & $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host assertions failed' }

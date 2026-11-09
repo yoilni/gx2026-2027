@@ -33,9 +33,10 @@ $names = @('MissionTask_S7MaterialOnly', 'MissionTask_WrapYaw', 'MissionTask_Yaw
   'MissionTask_RecordInitialGreenPush', 'MissionTask_StartS4PushTrial', 'MissionTask_StartS4TrackState',
   'MissionTask_RecoverS4FineArrange', 'MissionTask_HandleS4FineArrangeRequest',
   'MissionTask_CompleteS4FineArrange', 'MissionTask_RunS4FineArrange',
+  'MissionTask_RecoveryScanLeg',
   'MissionTask_BeginS3Vision', 'MissionTask_StartS7Decision',
   'MissionTask_GetSelectedObjectId', 'MissionTask_GetCarriedObjectId',
-  'MissionTask_RunS6FinalReverse', 'MissionTask_RunS6ExitTurn180', 'MissionTask_CheckRunningHealth')
+  'MissionTask_CommandDeliveryStraight', 'MissionTask_StepDelivery', 'MissionTask_RunS6FinalReverse', 'MissionTask_RunS6ExitTurn180', 'MissionTask_CheckRunningHealth')
 $functions = @($names | ForEach-Object { Extract-Function $_ })
 # Keep legacy test-turn stubs, but exercise the production angle PID for red E4.
 $functions += (Extract-Function 'MissionTask_CalculateS6YawPid').Replace(
@@ -62,6 +63,7 @@ $preamble = @'
 #include "chassis_motion.h"
 #include "heading_control.h"
 #include "chassis_actions.h"
+#include "flow_modules.h"
 #include "vision_motion.h"
 #include "robot_config.h"
 #include "maixcam_task.h"
@@ -327,7 +329,8 @@ $redSweepCases = Get-Content (Join-Path $PSScriptRoot 'host/red_e4_sweep_cases.c
 $redSweepPrototype = "`nstatic void verify_red_e4_sweep(void);`n"
 $fineCases = Get-Content (Join-Path $PSScriptRoot 'host/s4_fine_arrange_cases.c') -Raw
 $code = $preamble+"`n"+$globals+"`n"+$prototypes+$redSweepPrototype+$parserInclude+$stubs+"`n"+($functions -join "`n")+"`n"+$arrangeWait+"`n"+$cases+"`n"+$eventCases+"`n"+$frameCases+"`n"+$redSweepCases+"`n"+$fineCases
-$code | & $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" "-I$projectRoot/User/Hardware/Serial/inc" "-I$projectRoot/User/Motion/Chassis/inc" -x c - (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') "-I$projectRoot/User/Motion/Vision/inc" (Join-Path $projectRoot 'User/Motion/Chassis/src/chassis_actions.c') (Join-Path $projectRoot 'User/Motion/Vision/src/vision_motion.c') -o $testExe
+. (Join-Path $PSScriptRoot 'host/flow_build.ps1') $projectRoot
+$code | & $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" "-I$projectRoot/User/Hardware/Serial/inc" "-I$projectRoot/User/Motion/Chassis/inc" -x c - (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') "-I$projectRoot/User/Motion/Vision/inc" (Join-Path $projectRoot 'User/Motion/Chassis/src/chassis_actions.c') (Join-Path $projectRoot 'User/Motion/Vision/src/vision_motion.c') @flowBuildArgs -o $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host build failed' }
 & $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host assertions failed' }
