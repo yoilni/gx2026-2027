@@ -11,6 +11,7 @@
 
 #include "M2006.h"
 #include "actuator_task.h"
+#include "app_rtos_task_config.h"
 #include "chassis_motion.h"
 #include "departure_flow.h"
 #include "cmsis_os.h"
@@ -50,12 +51,6 @@ MissionContext mission_ctx = {
   .s3_target_select_command = MAIXCAM_COMMAND_SELECT_GREEN,
   .s4_fine_next_left = true,
   .s4_fixed_motion_ack = MAIXCAM_COMMAND_SIDE_PUSH_DONE_ACK,
-};
-
-static const osThreadAttr_t mission_task_attributes = {
-  .name = "missionTask",
-  .stack_size = MISSION_TASK_STACK_BYTES,
-  .priority = (osPriority_t)osPriorityAboveNormal,
 };
 
 static void MissionTask_DebugAngles(uint32_t now, bool force);
@@ -953,7 +948,7 @@ bool MissionTask_Create(void)
   }
 
   mission_task_handle = osThreadNew(StartMissionTask, NULL,
-                                    &mission_task_attributes);
+                                    &AppRtos_MissionTaskAttr);
   return mission_task_handle != NULL;
 }
 

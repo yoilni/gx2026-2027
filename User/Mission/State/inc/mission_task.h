@@ -202,7 +202,7 @@ typedef struct
   int16_t vision_forward_rpm;
 } MissionSnapshot;
 
-/* Called once from MX_FREERTOS_Init() after osKernelInitialize(). */
+/* Called from AppRtos_CreateTasks() after osKernelInitialize(). */
 bool MissionTask_Create(void);
 
 /* Task-context control requests. Emergency stop is latched until reset. */

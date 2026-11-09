@@ -1,23 +1,17 @@
 #include "motor_test_task.h"
 
 #include "M2006_Speed.h"
+#include "app_rtos_task_config.h"
 #include "cmsis_os.h"
 #include "debug_uart_task.h"
 #include "main.h"
 #include "robot_config.h"
 
 #define MOTOR_TEST_PERIOD_TICKS 10U
-#define MOTOR_TEST_STACK_BYTES (256U * 4U)
 #define MOTOR_TEST_FEEDBACK_WAIT_MS 2000U
 
 static osThreadId_t motor_test_task_handle;
 static volatile MotorTestStatus motor_test_status = MOTOR_TEST_WAIT_FEEDBACK;
-
-static const osThreadAttr_t motor_test_task_attributes = {
-  .name = "motorTestTask",
-  .stack_size = MOTOR_TEST_STACK_BYTES,
-  .priority = (osPriority_t)osPriorityNormal,
-};
 
 static bool MotorTest_FeedbackFresh(uint8_t motor_id, uint32_t now)
 {
@@ -101,7 +95,7 @@ bool MotorTestTask_Create(void)
     return true;
   }
   motor_test_task_handle = osThreadNew(StartMotorTestTask, NULL,
-                                      &motor_test_task_attributes);
+                                      &AppRtos_MotorTestTaskAttr);
   return motor_test_task_handle != NULL;
 }
 

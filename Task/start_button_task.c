@@ -1,5 +1,6 @@
 #include "start_button_task.h"
 
+#include "app_rtos_task_config.h"
 #include "cmsis_os.h"
 #include "debug_uart_task.h"
 #include "main.h"
@@ -10,15 +11,8 @@
 
 #define START_BUTTON_TASK_PERIOD_TICKS 10U
 #define START_BUTTON_DEBOUNCE_SAMPLES   5U
-#define START_BUTTON_TASK_STACK_BYTES  (256U * 4U)
 
 static osThreadId_t start_button_task_handle;
-
-static const osThreadAttr_t start_button_task_attributes = {
-  .name = "startButtonTask",
-  .stack_size = START_BUTTON_TASK_STACK_BYTES,
-  .priority = (osPriority_t)osPriorityNormal,
-};
 
 bool StartButtonTask_Create(void)
 {
@@ -28,7 +22,7 @@ bool StartButtonTask_Create(void)
   }
 
   start_button_task_handle = osThreadNew(StartStartButtonTask, NULL,
-                                         &start_button_task_attributes);
+                                         &AppRtos_StartButtonTaskAttr);
   return start_button_task_handle != NULL;
 }
 

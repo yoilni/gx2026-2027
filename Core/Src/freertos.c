@@ -26,16 +26,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "led_task.h"
-#include "M2006_task.h"
-#include "oled_task.h"
-#include "mission_task.h"
-#include "debug_uart_task.h"
-#include "start_button_task.h"
-#include "robot_config.h"
-#include "servo_test_task.h"
-#include "motor_test_task.h"
-#include "imu_task.h"
+#include "app_rtos.h"
 
 /* USER CODE END Includes */
 
@@ -56,34 +47,6 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-static osThreadId_t imuTaskHandle;
-static const osThreadAttr_t imuTask_attributes = {
-  .name = "imuTask",
-  .stack_size = 256U * 4U,
-  .priority = osPriorityBelowNormal,
-};
-#if ROBOT_STRAIGHT_TEST_ENABLED || (!ROBOT_MG90_SPEED_TEST_ENABLED && !ROBOT_FRAME_DOWN_TEST_ENABLED)
-static osThreadId_t motorTaskHandle;
-#endif
-#if ROBOT_OLED_ENABLED
-static osThreadId_t oledTaskHandle;
-#endif
-
-#if ROBOT_STRAIGHT_TEST_ENABLED || (!ROBOT_MG90_SPEED_TEST_ENABLED && !ROBOT_FRAME_DOWN_TEST_ENABLED)
-static const osThreadAttr_t motorTask_attributes = {
-  .name = "motorTask",
-  .stack_size = 256U * 4U,
-  .priority = (osPriority_t)osPriorityHigh,
-};
-#endif
-
-#if ROBOT_OLED_ENABLED
-static const osThreadAttr_t oledTask_attributes = {
-  .name = "oledTask",
-  .stack_size = 256U * 4U,
-  .priority = (osPriority_t)osPriorityLow,
-};
-#endif
 
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
@@ -96,7 +59,6 @@ const osThreadAttr_t defaultTask_attributes = {
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
-static void StartImuTask(void *argument);
 
 /* USER CODE END FunctionPrototypes */
 
@@ -135,42 +97,10 @@ void MX_FREERTOS_Init(void) {
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-#if ROBOT_STRAIGHT_TEST_ENABLED || (!ROBOT_MG90_SPEED_TEST_ENABLED && !ROBOT_FRAME_DOWN_TEST_ENABLED)
-  motorTaskHandle = osThreadNew(StartMotorTask, NULL, &motorTask_attributes);
-#endif
-#if ROBOT_OLED_ENABLED
-  oledTaskHandle = osThreadNew(StartOledTask, NULL, &oledTask_attributes);
-  if (oledTaskHandle == NULL)
+  if (!AppRtos_CreateTasks(defaultTaskHandle != NULL))
   {
     Error_Handler();
   }
-#endif
-  if ((defaultTaskHandle == NULL) || !DebugUartTask_Create(&huart2))
-  {
-    Error_Handler();
-  }
-  imuTaskHandle = osThreadNew(StartImuTask, NULL, &imuTask_attributes);
-  if (imuTaskHandle == NULL)
-  {
-    Error_Handler();
-  }
-#if ROBOT_MG90_SPEED_TEST_ENABLED
-  if (!ServoTestTask_Create())
-  {
-    Error_Handler();
-  }
-#endif
-#if ROBOT_STRAIGHT_TEST_ENABLED
-  if ((motorTaskHandle == NULL) || !MotorTestTask_Create())
-  {
-    Error_Handler();
-  }
-#elif !ROBOT_MG90_SPEED_TEST_ENABLED && !ROBOT_FRAME_DOWN_TEST_ENABLED
-  if ((motorTaskHandle == NULL) || !MissionTask_Create() || !StartButtonTask_Create())
-  {
-    Error_Handler();
-  }
-#endif
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -189,29 +119,12 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
-#if ROBOT_FRAME_DOWN_TEST_ENABLED
-  (void)DebugUart_Logf(
-      "[TEST] FRAME lift=%u cam=%u MOTOR OFF\r\n",
-      (unsigned int)ROBOT_FRAME_TEST_LIFT_DEG,
-      (unsigned int)ROBOT_FRAME_TEST_CAMERA_ANGLE_DEG);
-#endif
-  LED_Task(argument);
+  AppRtos_RunHeartbeat(argument);
   /* USER CODE END StartDefaultTask */
 }
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
-static void StartImuTask(void *argument)
-{
-  (void)argument;
-  for (;;)
-  {
-    uint32_t now = HAL_GetTick();
-    IMU_Service(now);
-    IMU_DebugYaw(HAL_GetTick());
-    (void)osDelay(20U);
-  }
-}
 
 /* USER CODE END Application */
 

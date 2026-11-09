@@ -1,5 +1,6 @@
 #include "servo_test_task.h"
 
+#include "app_rtos_task_config.h"
 #include "cmsis_os.h"
 #include "debug_uart_task.h"
 #include "main.h"
@@ -9,16 +10,9 @@
 #include <stdint.h>
 
 #define SERVO_TEST_TASK_PERIOD_TICKS  10U
-#define SERVO_TEST_TASK_STACK_BYTES   (256U * 4U)
 
 static osThreadId_t servo_test_task_handle;
 static volatile uint16_t servo_test_pulse_us = ROBOT_MG90_TEST_START_PULSE_US;
-
-static const osThreadAttr_t servo_test_task_attributes = {
-  .name = "servoTestTask",
-  .stack_size = SERVO_TEST_TASK_STACK_BYTES,
-  .priority = (osPriority_t)osPriorityLow,
-};
 
 uint16_t ServoTest_GetPulseUs(void)
 {
@@ -43,7 +37,7 @@ bool ServoTestTask_Create(void)
   }
 
   servo_test_task_handle = osThreadNew(StartServoTestTask, NULL,
-                                       &servo_test_task_attributes);
+                                       &AppRtos_ServoTestTaskAttr);
   return servo_test_task_handle != NULL;
 }
 

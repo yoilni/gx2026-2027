@@ -1,5 +1,6 @@
 #include "debug_uart_task.h"
 
+#include "app_rtos_task_config.h"
 #include "cmsis_os.h"
 #include "reset_reason.h"
 #include "uart_port.h"
@@ -12,7 +13,6 @@
 #define DEBUG_UART_QUEUE_DEPTH       8U
 #define DEBUG_UART_MESSAGE_CAPACITY 128U
 #define DEBUG_UART_TX_TIMEOUT_MS    100U
-#define DEBUG_UART_TASK_STACK_BYTES (256U * 4U)
 
 typedef struct
 {
@@ -22,12 +22,6 @@ typedef struct
 static UART_HandleTypeDef *debug_uart;
 static osMessageQueueId_t debug_uart_queue;
 static osThreadId_t debug_uart_task_handle;
-
-static const osThreadAttr_t debug_uart_task_attributes = {
-  .name = "debugUartTask",
-  .stack_size = DEBUG_UART_TASK_STACK_BYTES,
-  .priority = (osPriority_t)osPriorityLow,
-};
 
 static void DebugUart_Transmit(const char *text)
 {
@@ -100,7 +94,7 @@ bool DebugUartTask_Create(UART_HandleTypeDef *huart)
   }
 
   debug_uart_task_handle = osThreadNew(StartDebugUartTask, NULL,
-                                       &debug_uart_task_attributes);
+                                       &AppRtos_DebugUartTaskAttr);
   return debug_uart_task_handle != NULL;
 }
 

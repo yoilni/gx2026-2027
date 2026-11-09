@@ -35,6 +35,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Mission/SafeZone/src/mission_delivery.c
     Mission/Strategy/src/mission_strategy.c
     Runtime/Diagnostics/src/imu_diagnostics_adapter.c
+    Runtime/Rtos/src/app_rtos.c
+    Runtime/Rtos/src/app_rtos_task_config.c
 )
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
@@ -64,4 +66,5 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Mission/Capture/inc
     ${CMAKE_CURRENT_SOURCE_DIR}/Mission/SafeZone/inc
     ${CMAKE_CURRENT_SOURCE_DIR}/Mission/Strategy/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Runtime/Rtos/inc
 )

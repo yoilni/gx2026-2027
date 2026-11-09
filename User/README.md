@@ -78,4 +78,17 @@ and starts the existing tasks.
 Mission 仍由一个 FreeRTOS 任务顺序执行。各源文件独用的计数器、计时器保留
 为文件私有；跨模块的快照和任务状态集中在私有 `MissionContext`，不会向
 其他任务公开。其他任务继续通过 `MissionTask_GetSnapshot()` 读快照，通过
-原有请求 API 提交事件。此阶段不迁移 RTOS 创建接线。
+原有请求 API 提交事件。
+
+## 运行时接线：FreeRTOS
+
+- `Runtime/Rtos/src/app_rtos.c`：应用任务创建顺序、比赛和调试模式分支、
+  UART2 日志接线。任务创建失败仍走原来的启动故障处理，不启动调度器。
+- `Runtime/Rtos/src/app_rtos_task_config.c`：应用线程的名字、优先级和栈大小，
+  栈单位为字节。Mission 的互斥锁和事件标志、日志的队列仍由各自模块创建。
+- `Core/Src/main.c` 和 `Core/Src/freertos.c`：保留 CubeMX 的内核初始化、启动
+  和 `defaultTask` 创建，应用入口放在 `USER CODE` 区。心跳的 `defaultTask`
+  优先级和栈大小仍在 `gx_version1.ioc` 配置（Normal、128 字）。
+- 调试开关仍在 `Task/robot_config.h`，任务周期仍在各任务实现处，未修改。
+  `tests/verify_straight_test.ps1` 验证实际启动代码在比赛、直行、舵机、
+  挡板和直行加舵机模式下的创建顺序、线程配置与创建失败保护。
