@@ -30,7 +30,7 @@ static void verify_post22_search(void) {
     fake_now=140; rx(0xE3); tick(140);
     assert(!s4_post22_search_active && s51_e3_recovery_count==1);
     assert(mission_snapshot.state==MISSION_STATE_S3_SEARCH_TURN_CW);
-    assert(vision_search_e3_mode && vision_search_forward_rpm==-80 && vision_search_forward_ms==800);
+    assert(vision_search_e3_mode && vision_search_forward_rpm==80 && vision_search_forward_ms==800);
     assert(tx_count==4); //No51/03 reinitialization at E3 handoff.
     rx(0xE3); tick(640);
     assert(s51_e3_recovery_count==1 && mission_snapshot.state_entry_tick==140);
@@ -64,7 +64,8 @@ static void verify_post22_search(void) {
   assert(s4_post22_failed_sweeps==2 && !s4_post22_search_active);
   assert(mission_snapshot.state==MISSION_STATE_S3_SEARCH_TURN_CW && vision_search_e3_mode);
   assert(!s51_e3_recovery_count && tx_count==4 && !mission_snapshot.fault_flags);
-  tick(fake_now+ROBOT_E3_SEARCH_REVERSE_MS);
+  assert(vision_search_forward_rpm==80 && vision_search_forward_ms==800);
+  tick(fake_now+ROBOT_S51_E3_FORWARD_MS);
   assert(mission_snapshot.state==MISSION_STATE_S3_SEARCH_TURN_CCW);
   //New coordinates interrupt the escalated360 and resume without reinit.
   fake_now+=20; coords(6); tick(fake_now);

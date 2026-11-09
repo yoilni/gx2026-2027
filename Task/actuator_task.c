@@ -7,7 +7,17 @@
 #define ACTUATOR_TIM2_EXPECTED_PSC 83U
 #define ACTUATOR_TIM2_EXPECTED_ARR 19999U
 
-static uint8_t frame_pwm_started;
+static uint8_t baffle_pwm_suspended;
+static uint8_t claw_close_guard_active;
+static uint8_t claw_close_pending;
+static uint32_t claw_close_guard_tick;
+
+static uint8_t Actuator_DeferClawCommand(uint16_t angle_deg)
+{
+  if (claw_close_guard_active == 0U) return 0U;
+  claw_close_pending = (angle_deg == ROBOT_CLAW_CLOSED_DEG);
+  return claw_close_pending;
+}
 
 static HAL_StatusTypeDef Actuator_SetFrameAngles(uint16_t left_angle_deg,
                                                  uint16_t right_angle_deg);
@@ -56,14 +66,14 @@ HAL_StatusTypeDef Actuator_Init(void)
   }
 
 #if ROBOT_MG90_SPEED_TEST_ENABLED
-  pulse_us = ROBOT_MG90_TEST_PULSE_US;
+  pulse_us = ROBOT_MG90_TEST_START_PULSE_US;
 #elif ROBOT_FRAME_DOWN_TEST_ENABLED
   pulse_us = Actuator_Mg90AngleToPulse(ROBOT_FRAME_TEST_CAMERA_ANGLE_DEG);
 #else
   pulse_us = Actuator_Mg90AngleToPulse(ROBOT_CAMERA_WIDE_ANGLE_DEG);
 #endif
 
-  /* PA5 is TIM2 CH1: test angle in frame test, wide view in mission mode. */
+  /* PA5 is TIM2 CH1: initial bench pose or the configured mission wide view. */
   __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pulse_us);
   if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1) != HAL_OK)
   {
@@ -73,15 +83,31 @@ HAL_StatusTypeDef Actuator_Init(void)
   BootInit_DelayMs(ROBOT_CAMERA_POWERUP_SETTLE_MS);
 
 #if ROBOT_MG90_SPEED_TEST_ENABLED
-  /* Frame channels stay off during the camera-servo-only test. */
+  /* PA2 baffle and PA3 claw now have independent test angles. Never invoke
+     the legacy mirrored-frame setter. Started channels hold in hardware. */
+#if ROBOT_BAFFLE_TEST_ENABLED
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3,
+                       Actuator_FrameAngleToPulse(ROBOT_BAFFLE_TEST_ANGLE_DEG));
+  if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3) != HAL_OK)
+  {
+    return HAL_ERROR;
+  }
+#endif
+#if ROBOT_CLAW_TEST_ENABLED
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4,
+                       Actuator_FrameAngleToPulse(ROBOT_CLAW_TEST_ANGLE_DEG));
+  if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4) != HAL_OK)
+  {
+    return HAL_ERROR;
+  }
+#endif
   return HAL_OK;
 #elif ROBOT_FRAME_DOWN_TEST_ENABLED
   /* Hold the camera angle and the mirrored test lift above fully DOWN. */
   return Actuator_SetFramePartiallyRaised(ROBOT_FRAME_TEST_LIFT_DEG);
 #else
-  /* Raise the collection frame after the camera settles so the chassis can
-     cross the speed bump. State 3 lowers it before target tracking. */
-  return Actuator_SetFrameRaised();
+  /* The departure turn starts with the baffle down and claw closed. */
+  return Actuator_SetFrameAngles(ROBOT_BAFFLE_DOWN_DEG, ROBOT_CLAW_CLOSED_DEG);
 #endif
 }
 
@@ -98,37 +124,117 @@ static HAL_StatusTypeDef Actuator_SetFrameAngles(uint16_t left_angle_deg,
 
   left_pulse_us = Actuator_FrameAngleToPulse(left_angle_deg);
   right_pulse_us = Actuator_FrameAngleToPulse(right_angle_deg);
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, left_pulse_us);
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, right_pulse_us);
-
-  if (frame_pwm_started != 0U)
+  if (baffle_pwm_suspended == 0U)
   {
-    return HAL_OK;
+    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, left_pulse_us);
+  }
+  if (Actuator_DeferClawCommand(right_angle_deg) == 0U)
+  {
+    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, right_pulse_us);
   }
 
-  if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3) != HAL_OK)
-  {
-    return HAL_ERROR;
-  }
-  if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4) != HAL_OK)
+  if (baffle_pwm_suspended == 0U && (htim2.Instance->CCER & TIM_CCER_CC3E) == 0U &&
+      HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3) != HAL_OK)
   {
     return HAL_ERROR;
   }
+  if ((htim2.Instance->CCER & TIM_CCER_CC4E) == 0U &&
+      HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4) != HAL_OK)
+  {
+    return HAL_ERROR;
+  }
 
-  frame_pwm_started = 1U;
   return HAL_OK;
 }
 
-HAL_StatusTypeDef Actuator_SetFrameRaised(void)
+HAL_StatusTypeDef Actuator_SetBaffleAngle(uint16_t angle_deg)
 {
-  return Actuator_SetFrameAngles(ROBOT_LEFT_FRAME_UP_DEG,
-                                 ROBOT_RIGHT_FRAME_UP_DEG);
+  if (Actuator_TimerIsValid() == 0U) return HAL_ERROR;
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3,
+                       Actuator_FrameAngleToPulse(angle_deg));
+  if ((htim2.Instance->CCER & TIM_CCER_CC3E) == 0U &&
+      HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3) != HAL_OK)
+  {
+    return HAL_ERROR;
+  }
+  baffle_pwm_suspended = 0U;
+  return HAL_OK;
+}
+
+HAL_StatusTypeDef Actuator_StopBafflePwm(void)
+{
+  if (Actuator_TimerIsValid() == 0U) return HAL_ERROR;
+  if ((htim2.Instance->CCER & TIM_CCER_CC3E) != 0U &&
+      HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_3) != HAL_OK)
+  {
+    return HAL_ERROR;
+  }
+  /* Paired pose setters must not write or restart PA2 while suspended. */
+  baffle_pwm_suspended = 1U;
+  return HAL_OK;
+}
+
+HAL_StatusTypeDef Actuator_SetBaffleUpClawOpen(uint16_t claw_angle_deg)
+{
+  return Actuator_SetFrameAngles(ROBOT_BAFFLE_UP_DEG, claw_angle_deg);
 }
 
 HAL_StatusTypeDef Actuator_SetFrameLowered(void)
 {
-  return Actuator_SetFrameAngles(ROBOT_LEFT_FRAME_DOWN_DEG,
-                                 ROBOT_RIGHT_FRAME_DOWN_DEG);
+  return Actuator_SetFrameAngles(ROBOT_BAFFLE_DOWN_DEG,
+                                 ROBOT_CLAW_CLOSED_DEG);
+}
+
+HAL_StatusTypeDef Actuator_SetClawAngle(uint16_t angle_deg)
+{
+  if (Actuator_TimerIsValid() == 0U ||
+      (htim2.Instance->CCER & TIM_CCER_CC4E) == 0U)
+  {
+    return HAL_ERROR;
+  }
+
+  /* CH4 is already running; keep PWM continuous and do not move the baffle. */
+  if (Actuator_DeferClawCommand(angle_deg) == 0U)
+  {
+    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4,
+                         Actuator_FrameAngleToPulse(angle_deg));
+  }
+  return HAL_OK;
+}
+
+HAL_StatusTypeDef Actuator_SetClawClosed(void)
+{
+  return Actuator_SetClawAngle(ROBOT_CLAW_CLOSED_DEG);
+}
+
+void Actuator_DeferClawClose(uint32_t now)
+{
+  claw_close_guard_tick = now;
+  claw_close_pending = 1U;
+  claw_close_guard_active = 1U;
+}
+
+uint8_t Actuator_ClawCloseDeferred(void)
+{
+  return claw_close_guard_active;
+}
+
+void Actuator_CancelDeferredClawClose(void)
+{
+  claw_close_guard_active = 0U;
+  claw_close_pending = 0U;
+}
+
+HAL_StatusTypeDef Actuator_ServiceDeferredClawClose(uint32_t now)
+{
+  if (claw_close_guard_active == 0U ||
+      (uint32_t)(now - claw_close_guard_tick) < ROBOT_S6_EXIT_BAFFLE_SETTLE_MS)
+  {
+    return HAL_OK;
+  }
+  uint8_t pending = claw_close_pending;
+  Actuator_CancelDeferredClawClose();
+  return pending ? Actuator_SetClawClosed() : HAL_OK;
 }
 
 static uint16_t Actuator_PartialFrameAngle(uint16_t down_angle_deg,
@@ -179,6 +285,21 @@ static HAL_StatusTypeDef Actuator_SetCameraAngle(uint16_t angle_deg)
 HAL_StatusTypeDef Actuator_SetCameraWideView(void)
 {
   return Actuator_SetCameraAngle(ROBOT_CAMERA_WIDE_ANGLE_DEG);
+}
+
+HAL_StatusTypeDef Actuator_SetCameraObjectTrackView(void)
+{
+  return Actuator_SetCameraAngle(ROBOT_CAMERA_OBJECT_TRACK_ANGLE_DEG);
+}
+
+HAL_StatusTypeDef Actuator_SetCameraSafeZoneView(void)
+{
+  return Actuator_SetCameraAngle(ROBOT_CAMERA_SAFE_ZONE_ANGLE_DEG);
+}
+
+HAL_StatusTypeDef Actuator_SetCameraFinalTrackView(void)
+{
+  return Actuator_SetCameraAngle(ROBOT_CAMERA_FINAL_TRACK_ANGLE_DEG);
 }
 
 HAL_StatusTypeDef Actuator_SetCameraNearView(void)

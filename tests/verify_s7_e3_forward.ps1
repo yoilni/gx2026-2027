@@ -68,7 +68,7 @@ static int16_t MissionTask_CalculateS6YawTurn(uint32_t t,int32_t yaw) {
   return 0;
 }
 static HAL_StatusTypeDef Actuator_SetFrameLowered(void) { return HAL_OK; }
-static HAL_StatusTypeDef Actuator_SetCameraWideView(void) { return HAL_OK; }
+static HAL_StatusTypeDef Actuator_SetCameraObjectTrackView(void) { return HAL_OK; }
 void MaixCam_ClearObject(void) { ++clears; }
 void MaixCam_ClearEvent(void) { ++clears; }
 HAL_StatusTypeDef MaixCam_SendCommand(uint8_t c) {
@@ -217,12 +217,12 @@ int main(void) {
   assert(mission_snapshot.state==MISSION_STATE_S3_SEARCH_TURN_CW);
   assert(mission_snapshot.left_target_rpm==80);
 
-  // Generic03, initial green E3, and04 are not changed by the red-only setting.
+  // Ordinary51 now advances80/800; red, initial green and04 stay independent.
   setup(); mission_snapshot.state=MISSION_STATE_S3_TRACK_GREEN;
   s3_target_select_command=MAIXCAM_COMMAND_SELECT_BLACK_GREEN;
   MissionTask_StartVisionSearchRecovery(5000,MISSION_STATE_S3_TRACK_GREEN,35000,false);
   MissionTask_RunS3SearchTurn(5020);
-  assert(mission_snapshot.left_target_rpm==-80 && mission_snapshot.right_target_rpm==-80);
+  assert(mission_snapshot.left_target_rpm==80 && mission_snapshot.right_target_rpm==80);
   assert(vision_search_forward_ms==800 && !s7_red_recovery_used);
   setup(); mission_snapshot.state=MISSION_STATE_S3_TRACK_GREEN;
   s7_target_switch_enabled=false; s3_target_select_command=MAIXCAM_COMMAND_SELECT_GREEN;

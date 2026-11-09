@@ -25,15 +25,31 @@ static volatile MaixCam_Object maixcam_object;
 static volatile uint8_t maixcam_has_object;
 static volatile uint8_t maixcam_event_code;
 static volatile uint8_t maixcam_has_event;
-/* Only the three valid E4 successors are retained. De-duplication bounds
+/* Only valid E4 successors are retained. De-duplication bounds
    storage even if the camera repeats a phase notification indefinitely. */
-#define MAIXCAM_E4_STAGE_CAPACITY 3U
+#define MAIXCAM_E4_STAGE_CAPACITY 5U
 static volatile uint8_t maixcam_e4_stage_events[MAIXCAM_E4_STAGE_CAPACITY];
 static volatile uint8_t maixcam_e4_stage_count;
 static volatile uint8_t maixcam_e4_stage_buffering;
+static volatile uint8_t maixcam_fine_arrange_active;
+static volatile uint8_t maixcam_arrange02_active;
+static volatile uint8_t maixcam_fine_arrange_loss_pending;
 static volatile uint8_t maixcam_discard_object_frame;
+static volatile uint8_t maixcam_discard_search_reference_frame;
 static volatile uint8_t maixcam_red_priority_pending;
+static volatile uint8_t maixcam_casualty_regrip_enabled;
+static volatile uint8_t maixcam_casualty_34_seen;
+static volatile uint8_t maixcam_casualty_regrip_pending;
 static volatile uint8_t maixcam_safe_align_pending;
+static volatile uint8_t maixcam_bar_shift_pending;
+static volatile uint8_t maixcam_bar_shift_active;
+static volatile uint8_t maixcam_bar_shift_discard26_frame;
+static volatile uint8_t maixcam_start_avoidance_pending;
+static volatile uint32_t maixcam_start_avoidance_request_sequence;
+static volatile uint8_t maixcam_start_avoidance_active;
+static volatile uint8_t maixcam_start_avoidance_discard_motion_frame;
+static volatile uint8_t maixcam_supplement_e3_turn_active;
+static volatile uint8_t maixcam_supplement_e3_discard_motion_frame;
 static volatile uint8_t maixcam_corner_evacuation_active;
 static volatile uint16_t maixcam_ignored_corner_align_count;
 static volatile uint8_t maixcam_recovery_loss_filter;
@@ -56,6 +72,9 @@ static volatile uint8_t maixcam_load_check_interrupt_enabled;
 static volatile uint8_t maixcam_load_recheck_acked;
 static volatile uint8_t maixcam_load_recheck_ack_pending;
 static volatile uint8_t maixcam_load_recheck_finish_pending;
+static volatile uint8_t maixcam_casualty_load_adjust_pending;
+static volatile uint8_t maixcam_casualty_load_adjust_active;
+static volatile uint8_t maixcam_casualty_load_adjust_discard_frame;
 static volatile MaixCam_Object maixcam_load_recheck_report;
 static volatile MaixCam_Object maixcam_load_recheck_finish_report;
 
@@ -64,15 +83,36 @@ static void MaixCam_ResetE4StageEvents(void)
   maixcam_e4_stage_count = 0U;
 }
 
+static bool MaixCam_IsStartAvoidanceMotionEvent(uint8_t command)
+{
+  return command == MAIXCAM_EVENT_SUPPLEMENT_CAPTURE_REQUEST ||
+      command == MAIXCAM_EVENT_OBJECT_IN_FRAME ||
+      command == MAIXCAM_EVENT_CENTER_REACHED ||
+      command == MAIXCAM_EVENT_FINAL_OBJECT_IN_FRAME ||
+      command == MAIXCAM_EVENT_CASUALTY_REGRIP ||
+      command == MAIXCAM_EVENT_ARRANGE_READY ||
+      command == MAIXCAM_EVENT_LEFT_TARGET_READY ||
+      command == MAIXCAM_EVENT_OFFSET_PUSH ||
+      command == MAIXCAM_EVENT_SIDE_PUSH ||
+      command == MAIXCAM_EVENT_SKIP_TO_FINAL_TRACK ||
+      command == MAIXCAM_EVENT_ARRANGE_TARGET_LOST ||
+      command == MAIXCAM_EVENT_SEARCH_TARGET_LOST ||
+      command == MAIXCAM_EVENT_CENTER_TARGET_LOST ||
+      command == MAIXCAM_EVENT_NO_TARGET;
+}
+
 /* Called inside UART ISR or a task critical section. A phase already queued
    is not overwritten by duplicate E4 or by a later phase in the same burst. */
 static bool MaixCam_BufferE4StageEvent(uint8_t command)
 {
   if ((command != MAIXCAM_EVENT_CENTER_REACHED &&
        command != MAIXCAM_EVENT_ARRANGE_READY &&
+       command != MAIXCAM_EVENT_OFFSET_PUSH &&
+       command != MAIXCAM_EVENT_SIDE_PUSH &&
        command != MAIXCAM_EVENT_SKIP_TO_FINAL_TRACK) ||
       (maixcam_recovery_loss_filter != MAIXCAM_EVENT_CENTER_TARGET_LOST &&
        maixcam_e4_stage_buffering == 0U &&
+       maixcam_fine_arrange_active == 0U &&
        maixcam_e4_stage_count == 0U))
   {
     return false;
@@ -81,16 +121,21 @@ static bool MaixCam_BufferE4StageEvent(uint8_t command)
   {
     if (maixcam_e4_stage_events[i] == command) return true;
   }
-  /* Three possible distinct commands and three slots: no overwrite/overflow. */
+  /* Five distinct commands and five slots: no overwrite/overflow. */
   maixcam_e4_stage_events[maixcam_e4_stage_count++] = command;
   return true;
 }
 
 static void MaixCam_ResetParser(uint8_t byte)
 {
+  maixcam_casualty_load_adjust_discard_frame = 0U;
+  maixcam_bar_shift_discard26_frame = 0U;
+  maixcam_start_avoidance_discard_motion_frame = 0U;
+  maixcam_supplement_e3_discard_motion_frame = 0U;
   maixcam_skip_supplement05_frame = 0U;
   maixcam_discard_current_frame = 0U;
   maixcam_discard_object_frame = 0U;
+  maixcam_discard_search_reference_frame = 0U;
   if (byte == MAIXCAM_FRAME_HEADER_1)
   {
     maixcam_frame_buffer[0] = byte;
@@ -161,6 +206,9 @@ static void MaixCam_PublishFrame(void)
     return;
   }
 
+  /* Load reports above remain usable if a safety05 interrupts46. */
+  if (maixcam_bar_shift_active != 0U || maixcam_start_avoidance_active != 0U ||
+      maixcam_supplement_e3_turn_active != 0U) return;
   maixcam_object.object_id = maixcam_frame_buffer[2];
   maixcam_object.x_error_px =
       x_sign == MAIXCAM_SIGN_POSITIVE
@@ -275,6 +323,8 @@ static void MaixCam_ProcessByte(uint8_t byte)
 
     case MAIXCAM_WAIT_EVENT_TAIL_2:
       if ((byte == MAIXCAM_FRAME_TAIL_2) &&
+          !(maixcam_discard_search_reference_frame != 0U &&
+            MaixCam_IsStartAvoidanceMotionEvent(maixcam_frame_buffer[2])) &&
           ((maixcam_discard_current_frame == 0U) ||
            (maixcam_load_check_interrupt_enabled != 0U &&
             maixcam_frame_buffer[2] == MAIXCAM_EVENT_LOAD_CHECK_REQUEST) ||
@@ -282,7 +332,24 @@ static void MaixCam_ProcessByte(uint8_t byte)
              (maixcam_load_recheck_enabled != 0U && maixcam_load_recheck_acked != 0U)) &&
             maixcam_frame_buffer[2] == MAIXCAM_EVENT_NO_ARRANGE_REQUIRED)))
       {
-        if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_LOAD_CHECK_REQUEST &&
+        if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_START_ZONE_AVOID)
+        {
+          /* Coalesce action-era duplicates, including a half AE completing
+             after the ACK boundary. Record RX order for an AE arriving
+             during TX: later fresh coordinates cannot make it a new turn. */
+          if (maixcam_start_avoidance_active == 0U &&
+              maixcam_start_avoidance_discard_motion_frame == 0U &&
+              maixcam_start_avoidance_pending == 0U)
+          {
+            maixcam_start_avoidance_request_sequence = maixcam_object.sequence;
+            maixcam_start_avoidance_pending = 1U;
+          }
+        }
+        else if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_SAFE_ZONE_BAR_SHIFT)
+        {
+          maixcam_bar_shift_pending = 1U;
+        }
+        else if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_LOAD_CHECK_REQUEST &&
             (maixcam_skip_supplement05_frame != 0U ||
              (maixcam_supplement_direct_search != 0U &&
               maixcam_load_recheck_enabled == 0U)))
@@ -331,6 +398,17 @@ static void MaixCam_ProcessByte(uint8_t byte)
               maixcam_has_object = 0U;
               maixcam_safe_align_pending = 0U;
             }
+          }
+          else if (maixcam_casualty_load_adjust_active != 0U ||
+                   maixcam_casualty_load_adjust_discard_frame != 0U)
+          {
+            /* Wait for TX45: do not latch an early result or restart45. */
+          }
+          else if (maixcam_load_recheck_acked != 0U &&
+                   maixcam_load_recheck_finish_pending == 0U &&
+                   command == MAIXCAM_EVENT_CASUALTY_LOAD_ADJUST)
+          {
+            maixcam_casualty_load_adjust_pending = 1U;
           }
           else if (maixcam_load_recheck_acked != 0U &&
                    command == MAIXCAM_EVENT_NO_ARRANGE_REQUIRED)
@@ -428,6 +506,20 @@ static void MaixCam_ProcessByte(uint8_t byte)
             }
           }
         }
+        else if ((maixcam_start_avoidance_active != 0U ||
+                  maixcam_start_avoidance_discard_motion_frame != 0U ||
+                  maixcam_supplement_e3_turn_active != 0U ||
+                  maixcam_supplement_e3_discard_motion_frame != 0U) &&
+                 MaixCam_IsStartAvoidanceMotionEvent(maixcam_frame_buffer[2]))
+        {
+          /* These target-position decisions belong to the pre-turn view.
+             Priority05/06/report handling above,11 and AE remain alive. */
+        }
+        else if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_CASUALTY_REGRIP)
+        {
+          if (maixcam_casualty_regrip_enabled != 0U && maixcam_casualty_34_seen != 0U)
+            maixcam_casualty_regrip_pending = 1U;
+        }
         else if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_SUPPLEMENT_CAPTURE_REQUEST)
         {
           if (maixcam_supplement_window_enabled != 0U)
@@ -469,6 +561,15 @@ static void MaixCam_ProcessByte(uint8_t byte)
                  MAIXCAM_EVENT_SEARCH_TARGET_LOST ||
                  maixcam_frame_buffer[2] == MAIXCAM_EVENT_CENTER_TARGET_LOST)
         {
+          if (maixcam_fine_arrange_active != 0U &&
+              maixcam_frame_buffer[2] == MAIXCAM_EVENT_CENTER_TARGET_LOST)
+          {
+            /* A later coordinate or stage message cannot erase this loss. */
+            maixcam_fine_arrange_loss_pending = 1U;
+            maixcam_has_object = 0U;
+            MaixCam_ResetParser(byte);
+            break;
+          }
           if (maixcam_recovery_loss_filter != maixcam_frame_buffer[2])
           {
             maixcam_has_object = 0U;
@@ -507,7 +608,11 @@ static void MaixCam_ProcessByte(uint8_t byte)
         }
         else if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_SAFE_ZONE_ALIGN_READY)
         {
-          if (maixcam_corner_evacuation_active != 0U)
+          if (maixcam_bar_shift_active != 0U || maixcam_bar_shift_discard26_frame != 0U)
+          {
+            /* A new26 is required after the46 acknowledgment boundary. */
+          }
+          else if (maixcam_corner_evacuation_active != 0U)
           {
             if (maixcam_ignored_corner_align_count < UINT16_MAX)
               ++maixcam_ignored_corner_align_count;
@@ -523,6 +628,8 @@ static void MaixCam_ProcessByte(uint8_t byte)
           maixcam_has_event = 1U;
         }
         else if ((maixcam_frame_buffer[2] == MAIXCAM_EVENT_ARRANGE_READY) ||
+                 (maixcam_frame_buffer[2] == MAIXCAM_EVENT_OFFSET_PUSH) ||
+                 (maixcam_frame_buffer[2] == MAIXCAM_EVENT_SIDE_PUSH) ||
                  (maixcam_frame_buffer[2] == MAIXCAM_EVENT_CENTER_REACHED) ||
                  (maixcam_frame_buffer[2] ==
                   MAIXCAM_EVENT_LEFT_TARGET_READY) ||
@@ -533,8 +640,41 @@ static void MaixCam_ProcessByte(uint8_t byte)
                   (maixcam_frame_buffer[2] ==
                    MAIXCAM_EVENT_ARRANGE_TARGET_LOST))
         {
+          if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_ARRANGE_READY)
+          {
+            /* Fence the pre02 object, preserving ROI frames after an
+               accepted04/02. During05/02 backoff, coordinates do not
+               drive. A02 during42 is still a valid deferred decision. */
+            if (maixcam_arrange02_active != 0U)
+            {
+              MaixCam_ResetParser(byte);
+              break;
+            }
+            bool duplicate = maixcam_has_event != 0U &&
+                maixcam_event_code == MAIXCAM_EVENT_ARRANGE_READY;
+            for (uint8_t i = 0U; i < maixcam_e4_stage_count; ++i)
+              if (maixcam_e4_stage_events[i] == MAIXCAM_EVENT_ARRANGE_READY) duplicate = true;
+            if (!duplicate) maixcam_has_object = 0U;
+          }
+          if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_OFFSET_PUSH ||
+              maixcam_frame_buffer[2] == MAIXCAM_EVENT_SIDE_PUSH)
+          {
+            /* The next request is valid only after the current ACK. Active
+               duplicates must not invalidate new ROI frames or restart time. */
+            if (maixcam_fine_arrange_active != 0U)
+            {
+              MaixCam_ResetParser(byte);
+              break;
+            }
+            if (!(maixcam_has_event != 0U &&
+                  maixcam_event_code == maixcam_frame_buffer[2]))
+              maixcam_has_object = 0U;
+          }
           if (!MaixCam_BufferE4StageEvent(maixcam_frame_buffer[2]))
           {
+            if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_FINAL_OBJECT_IN_FRAME &&
+                maixcam_casualty_regrip_enabled != 0U)
+              maixcam_casualty_34_seen = 1U;
             maixcam_event_code = maixcam_frame_buffer[2];
             maixcam_has_event = 1U;
           }
@@ -564,10 +704,26 @@ HAL_StatusTypeDef MaixCam_Init(UART_HandleTypeDef *huart)
   maixcam_has_event = 0U;
   MaixCam_ResetE4StageEvents();
   maixcam_e4_stage_buffering = 0U;
+  maixcam_fine_arrange_active = 0U;
+  maixcam_arrange02_active = 0U;
+  maixcam_fine_arrange_loss_pending = 0U;
   maixcam_discard_object_frame = 0U;
+  maixcam_discard_search_reference_frame = 0U;
   maixcam_object.sequence = 0U;
   maixcam_red_priority_pending = 0U;
+  maixcam_casualty_regrip_enabled = 0U;
+  maixcam_casualty_34_seen = 0U;
+  maixcam_casualty_regrip_pending = 0U;
   maixcam_safe_align_pending = 0U;
+  maixcam_bar_shift_pending = 0U;
+  maixcam_bar_shift_active = 0U;
+  maixcam_bar_shift_discard26_frame = 0U;
+  maixcam_start_avoidance_pending = 0U;
+  maixcam_start_avoidance_request_sequence = 0U;
+  maixcam_start_avoidance_active = 0U;
+  maixcam_start_avoidance_discard_motion_frame = 0U;
+  maixcam_supplement_e3_turn_active = 0U;
+  maixcam_supplement_e3_discard_motion_frame = 0U;
   maixcam_corner_evacuation_active = 0U;
   maixcam_ignored_corner_align_count = 0U;
   maixcam_recovery_loss_filter = 0U;
@@ -590,6 +746,9 @@ HAL_StatusTypeDef MaixCam_Init(UART_HandleTypeDef *huart)
   maixcam_load_recheck_acked = 0U;
   maixcam_load_recheck_ack_pending = 0U;
   maixcam_load_recheck_finish_pending = 0U;
+  maixcam_casualty_load_adjust_pending = 0U;
+  maixcam_casualty_load_adjust_active = 0U;
+  maixcam_casualty_load_adjust_discard_frame = 0U;
   maixcam_load_recheck_report.object_id = 0U;
   maixcam_load_recheck_report.sequence = 0U;
   maixcam_load_recheck_finish_report.object_id = 0U;
@@ -642,6 +801,26 @@ uint32_t MaixCam_FenceObjectReference(void)
   return sequence;
 }
 
+uint32_t MaixCam_FenceSearchReference(void)
+{
+  uint32_t primask = __get_PRIMASK();
+  uint32_t sequence;
+  __disable_irq();
+  sequence = MaixCam_FenceObjectReference();
+  /* A44 now starts03, not the old14/arrange wait. Retire only decisions
+     from that old target reference, once BEFORE TX. Independent05/06/AE/11
+     and their load reports must survive this boundary. */
+  if (maixcam_has_event != 0U && MaixCam_IsStartAvoidanceMotionEvent(maixcam_event_code))
+    maixcam_has_event = 0U;
+  MaixCam_ResetE4StageEvents();
+  maixcam_casualty_34_seen = 0U;
+  maixcam_casualty_regrip_pending = 0U;
+  if (maixcam_parser_state != MAIXCAM_WAIT_HEADER_1)
+    maixcam_discard_search_reference_frame = 1U;
+  if (primask == 0U) __enable_irq();
+  return sequence;
+}
+
 void MaixCam_ClearEvent(void)
 {
   uint32_t primask = __get_PRIMASK();
@@ -650,6 +829,8 @@ void MaixCam_ClearEvent(void)
   maixcam_event_code = 0U;
   maixcam_has_event = 0U;
   MaixCam_ResetE4StageEvents();
+  maixcam_casualty_34_seen = 0U;
+  maixcam_casualty_regrip_pending = 0U;
   maixcam_red_priority_pending = 0U;
   /* 26 has an independent lifecycle; clearing maneuver events must not lose it. */
   if (primask == 0U)
@@ -671,6 +852,8 @@ void MaixCam_ClearPendingInput(void)
   maixcam_event_code = 0U;
   maixcam_has_event = 0U;
   MaixCam_ResetE4StageEvents();
+  maixcam_casualty_34_seen = 0U;
+  maixcam_casualty_regrip_pending = 0U;
   maixcam_red_priority_pending = 0U;
   maixcam_safe_align_pending = 0U;
   maixcam_supplement_request_pending = 0U;
@@ -780,6 +963,57 @@ void MaixCam_SetE4StageBuffering(bool enabled)
   if (primask == 0U) __enable_irq();
 }
 
+void MaixCam_SetFineArrangeActive(bool active)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  if (!active || maixcam_fine_arrange_active == 0U)
+    maixcam_fine_arrange_loss_pending = 0U;
+  maixcam_fine_arrange_active = active ? 1U : 0U;
+  if (primask == 0U) __enable_irq();
+}
+
+void MaixCam_SetArrange02Active(bool active)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  maixcam_arrange02_active = active ? 1U : 0U;
+  if (primask == 0U) __enable_irq();
+}
+
+bool MaixCam_FineArrangeLossPending(void)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  bool pending = maixcam_fine_arrange_loss_pending != 0U;
+  if (primask == 0U) __enable_irq();
+  return pending;
+}
+
+bool MaixCam_CloseFineArrange(void)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  bool pending = maixcam_fine_arrange_loss_pending != 0U;
+  maixcam_fine_arrange_active = 0U;
+  maixcam_fine_arrange_loss_pending = 0U;
+  if (primask == 0U) __enable_irq();
+  return pending;
+}
+
+bool MaixCam_TakeFineArrangeRequest(uint8_t *command)
+{
+  if (command == NULL) return false;
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  uint8_t next = maixcam_e4_stage_count != 0U ? maixcam_e4_stage_events[0]
+      : (maixcam_has_event != 0U ? maixcam_event_code : 0U);
+  bool pending = next == MAIXCAM_EVENT_OFFSET_PUSH || next == MAIXCAM_EVENT_SIDE_PUSH;
+  if (pending) (void)MaixCam_TakeEvent(command);
+  if (primask == 0U) __enable_irq();
+  return pending;
+}
+
 bool MaixCam_DropEventIf(uint8_t event_code)
 {
   uint32_t primask = __get_PRIMASK();
@@ -837,6 +1071,114 @@ bool MaixCam_TakeSafeZoneAlignRequest(void)
   return pending;
 }
 
+bool MaixCam_TakeBarShiftRequest(void)
+{
+  uint32_t primask = __get_PRIMASK();
+  bool pending;
+  __disable_irq();
+  pending = maixcam_bar_shift_pending != 0U;
+  maixcam_bar_shift_pending = 0U;
+  if (primask == 0U) __enable_irq();
+  return pending;
+}
+
+void MaixCam_SetBarShiftActive(bool active)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  if ((maixcam_bar_shift_active != 0U) != active)
+  {
+    if (maixcam_parser_state != MAIXCAM_WAIT_HEADER_1)
+    {
+      /* Fence only old coordinates/26; a partial46/16/05 remains a real
+         short event and must not be discarded with the old reference. */
+      if (maixcam_load_recheck_enabled == 0U || maixcam_load_recheck_acked == 0U)
+        maixcam_discard_object_frame = 1U;
+      maixcam_bar_shift_discard26_frame = 1U;
+    }
+    if (active)
+    {
+      maixcam_has_object = 0U;
+      maixcam_safe_align_pending = 0U;
+    }
+    maixcam_bar_shift_active = active ? 1U : 0U;
+  }
+  if (primask == 0U) __enable_irq();
+}
+
+bool MaixCam_TakeStartZoneAvoidanceRequest(uint32_t *coordinate_sequence)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  bool pending = maixcam_start_avoidance_pending != 0U;
+  if (pending && coordinate_sequence != NULL)
+    *coordinate_sequence = maixcam_start_avoidance_request_sequence;
+  maixcam_start_avoidance_pending = 0U;
+  if (primask == 0U) __enable_irq();
+  return pending;
+}
+
+void MaixCam_SetStartZoneAvoidanceActive(bool active)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  if ((maixcam_start_avoidance_active != 0U) != active)
+  {
+    if (maixcam_parser_state != MAIXCAM_WAIT_HEADER_1)
+    {
+      if (maixcam_load_recheck_enabled == 0U || maixcam_load_recheck_acked == 0U)
+        maixcam_discard_object_frame = 1U;
+      maixcam_start_avoidance_discard_motion_frame = 1U;
+    }
+    if (active)
+    {
+      maixcam_start_avoidance_pending = 0U;
+      maixcam_has_object = 0U;
+      /* Only invalidate old target-view decisions, never clear all mailboxes.
+         In particular05/06 reports and an independent11 are preserved. */
+      if (maixcam_has_event != 0U && MaixCam_IsStartAvoidanceMotionEvent(maixcam_event_code))
+        maixcam_has_event = 0U;
+      uint8_t kept = 0U;
+      for (uint8_t i = 0U; i < maixcam_e4_stage_count; ++i)
+        if (!MaixCam_IsStartAvoidanceMotionEvent(maixcam_e4_stage_events[i]))
+          maixcam_e4_stage_events[kept++] = maixcam_e4_stage_events[i];
+      maixcam_e4_stage_count = kept;
+    }
+    maixcam_start_avoidance_active = active ? 1U : 0U;
+  }
+  if (primask == 0U) __enable_irq();
+}
+
+void MaixCam_SetSupplementE3TurnActive(bool active)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  if ((maixcam_supplement_e3_turn_active != 0U) != active)
+  {
+    if (maixcam_parser_state != MAIXCAM_WAIT_HEADER_1)
+    {
+      /* Do not discard a cargo report if05 interrupted the turn. AE has a
+         separate latch/partial-frame rule and must still interrupt E3. */
+      if (maixcam_load_recheck_enabled == 0U || maixcam_load_recheck_acked == 0U)
+        maixcam_discard_object_frame = 1U;
+      maixcam_supplement_e3_discard_motion_frame = 1U;
+    }
+    if (active)
+    {
+      maixcam_has_object = 0U;
+      if (maixcam_has_event != 0U && MaixCam_IsStartAvoidanceMotionEvent(maixcam_event_code))
+        maixcam_has_event = 0U;
+      uint8_t kept = 0U;
+      for (uint8_t i = 0U; i < maixcam_e4_stage_count; ++i)
+        if (!MaixCam_IsStartAvoidanceMotionEvent(maixcam_e4_stage_events[i]))
+          maixcam_e4_stage_events[kept++] = maixcam_e4_stage_events[i];
+      maixcam_e4_stage_count = kept;
+    }
+    maixcam_supplement_e3_turn_active = active ? 1U : 0U;
+  }
+  if (primask == 0U) __enable_irq();
+}
+
 bool MaixCam_TakeRedPriorityRequest(void)
 {
   uint32_t primask = __get_PRIMASK();
@@ -844,6 +1186,33 @@ bool MaixCam_TakeRedPriorityRequest(void)
   __disable_irq();
   pending = maixcam_red_priority_pending != 0U;
   maixcam_red_priority_pending = 0U;
+  if (primask == 0U) __enable_irq();
+  return pending;
+}
+
+void MaixCam_SetCasualtyRegripEnabled(bool enabled)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  if (!enabled || maixcam_casualty_regrip_enabled == 0U)
+  {
+    maixcam_casualty_34_seen = 0U;
+    maixcam_casualty_regrip_pending = 0U;
+  }
+  maixcam_casualty_regrip_enabled = enabled ? 1U : 0U;
+  if (primask == 0U) __enable_irq();
+}
+
+bool MaixCam_TakeCasualtyRegripRequest(void)
+{
+  uint32_t primask = __get_PRIMASK();
+  bool pending;
+  __disable_irq();
+  pending = maixcam_casualty_regrip_pending != 0U;
+  /* Turn complete: close this capture window even when no54 arrived. */
+  maixcam_casualty_regrip_enabled = 0U;
+  maixcam_casualty_34_seen = 0U;
+  maixcam_casualty_regrip_pending = 0U;
   if (primask == 0U) __enable_irq();
   return pending;
 }
@@ -1002,6 +1371,9 @@ void MaixCam_SetLoadRecheckEnabled(bool enabled)
     maixcam_load_recheck_acked = 0U;
     maixcam_load_recheck_ack_pending = 0U;
     maixcam_load_recheck_finish_pending = 0U;
+    maixcam_casualty_load_adjust_pending = 0U;
+    maixcam_casualty_load_adjust_active = 0U;
+    maixcam_casualty_load_adjust_discard_frame = 0U;
     maixcam_load_recheck_report.object_id = 0U;
     maixcam_load_recheck_finish_report.object_id = 0U;
   }
@@ -1030,4 +1402,38 @@ bool MaixCam_TakeLoadRecheckFinish(MaixCam_Object *report)
   maixcam_load_recheck_finish_pending = 0U;
   if (primask == 0U) __enable_irq();
   return pending;
+}
+
+bool MaixCam_LoadRecheckFinishPending(void)
+{
+  return maixcam_load_recheck_finish_pending != 0U;
+}
+
+bool MaixCam_TakeCasualtyLoadAdjust(MaixCam_Object *report)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  bool pending = maixcam_casualty_load_adjust_pending != 0U;
+  if (pending && report != NULL) *report = maixcam_load_recheck_report;
+  maixcam_casualty_load_adjust_pending = 0U;
+  if (primask == 0U) __enable_irq();
+  return pending;
+}
+
+void MaixCam_SetCasualtyLoadAdjustActive(bool active)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  if (!active && maixcam_casualty_load_adjust_active != 0U &&
+      maixcam_parser_state != MAIXCAM_WAIT_HEADER_1)
+    maixcam_casualty_load_adjust_discard_frame = 1U;
+  maixcam_casualty_load_adjust_active = active ? 1U : 0U;
+  if (active)
+  {
+    /* A result in the RX burst after45, before TX45, belongs to the old pose. */
+    maixcam_casualty_load_adjust_pending = 0U;
+    maixcam_load_recheck_finish_pending = 0U;
+    maixcam_has_event = 0U;
+  }
+  if (primask == 0U) __enable_irq();
 }

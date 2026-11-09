@@ -15,7 +15,7 @@ function Extract-Function([string]$name) {
   }
   $source.Substring($match.Index, $cursor - $match.Index)
 }
-$names = @('MissionTask_WrapYaw', 'MissionTask_YawError', 'MissionTask_Abs32',
+$names = @('MissionTask_S7MaterialOnly', 'MissionTask_WrapYaw', 'MissionTask_YawError', 'MissionTask_Abs32',
   'MissionTask_HeadingTurnExpired', 'MissionTask_RunRedSearchSweep',
   'MissionTask_ResetS6ControllerState',
   'MissionTask_ClampFloat', 'MissionTask_ActiveRecoveryLossEvent',
@@ -24,14 +24,24 @@ $names = @('MissionTask_WrapYaw', 'MissionTask_YawError', 'MissionTask_Abs32',
   'MissionTask_UpdateVisionInput', 'MissionTask_CalculateS6YawTurn',
   'MissionTask_ReturnToS4TrackCenter', 'MissionTask_AckS4Center',
   'MissionTask_ResumeS4AfterE4', 'MissionTask_StartS4E4Spin',
-  'MissionTask_RunS4E4Spin', 'MissionTask_StartS4E4Recovery',
+  'MissionTask_RunS4E4Spin', 'MissionTask_StartS4GreenScatter', 'MissionTask_StartS4E4Recovery',
+  'MissionTask_StartS4GreenHalfTurn', 'MissionTask_FinishS4GreenRecovery',
   'MissionTask_RunS4E4Recovery', 'MissionTask_StartS3Align',
+  'MissionTask_RunS3Track', 'MissionTask_TryStartS3Capture', 'MissionTask_HandleS3TargetLost',
+  'MissionTask_StartS4TrackCenterFrom04', 'MissionTask_StartVisionSearchRecovery',
+  'MissionTask_RunS3GreenE3Recovery',
+  'MissionTask_RecordInitialGreenPush', 'MissionTask_StartS4PushTrial', 'MissionTask_StartS4TrackState',
+  'MissionTask_RecoverS4FineArrange', 'MissionTask_HandleS4FineArrangeRequest',
+  'MissionTask_CompleteS4FineArrange', 'MissionTask_RunS4FineArrange',
   'MissionTask_BeginS3Vision', 'MissionTask_StartS7Decision',
+  'MissionTask_GetSelectedObjectId', 'MissionTask_GetCarriedObjectId',
   'MissionTask_RunS6FinalReverse', 'MissionTask_RunS6ExitTurn180', 'MissionTask_CheckRunningHealth')
 $functions = @($names | ForEach-Object { Extract-Function $_ })
 # Keep legacy test-turn stubs, but exercise the production angle PID for red E4.
 $functions += (Extract-Function 'MissionTask_CalculateS6YawPid').Replace(
   'MissionTask_CalculateS6YawPid(', 'Real_RedYawPid(')
+$functions += (Extract-Function 'MissionTask_RunS6TurnToHeading').Replace(
+  'MissionTask_RunS6TurnToHeading(', 'Real_GreenTurnToHeading(')
 $prototypes = ($functions | ForEach-Object { $_.Substring(0, $_.IndexOf('{')).TrimEnd() + ';' }) -join "`n"
 $start = $source.IndexOf('static osThreadId_t mission_task_handle;')
 $globals = $source.Substring($start, $source.IndexOf('static const osThreadAttr_t mission_task_attributes') - $start)
@@ -70,8 +80,12 @@ static float selected_turn_limit;
 static bool turn_aligned;
 static bool tx_ok;
 static uint8_t inject_stage_on_tx;
+static uint8_t inject44_event, inject44_coord;
+static bool inject44_partial_tail;
 static bool frame_down, frame_lower_ok;
 static unsigned frame_lower_calls;
+static unsigned baffle_resume_calls;
+static uint8_t fine_inject_on_ack;
 static void byte(uint8_t b) {
   ++rx_bytes;maixcam_rx_byte=b;MaixCam_UART_RxCpltCallback(maixcam_uart);
 }
@@ -85,6 +99,7 @@ static void coords(uint8_t id) {
 }
 static bool DebugUart_Log(const char *s) { (void)s;return true; }
 static bool DebugUart_Logf(const char *s,...) { (void)s;return true; }
+static void MissionTask_DebugS6(uint32_t now) { (void)now; }
 static void MissionTask_StopWheels(void) {
   mission_snapshot.left_target_rpm=mission_snapshot.right_target_rpm=0;
 }
@@ -98,8 +113,19 @@ static uint32_t MissionTask_GetRequiredFaults(void) { return health_faults; }
 static void MissionTask_EnterState(MissionState s,uint32_t t) {
   if(mission_snapshot.state==s) return;
   mission_snapshot.state=s;mission_snapshot.state_entry_tick=t;
+  if(s!=MISSION_STATE_S3_LOWER_FRAME) s3_entry_pose_ready=false;
+  if(s<MISSION_STATE_S4_FINE32_TRACK || s>MISSION_STATE_S4_FINE42_FINISH_TURN_LEFT)
+    s4_initial_green02_active=false;
+  if(s!=MISSION_STATE_S4_WAIT_ARRANGE_READY) s4_fine_waiting_decision=s4_direct_capture_wait24=false;
+  if(s!=MISSION_STATE_S4_E4_PUSH_RIGHT) s4_green_e4_half_turn_active=false;
   MaixCam_SetRecoveryLossFilter(MissionTask_ActiveRecoveryLossEvent());
   MaixCam_SetLoadCheckInterruptEnabled(MissionTask_CanPauseForLoadCheck());
+  MaixCam_SetFineArrangeActive(s==MISSION_STATE_S4_TRACK_RIGHT_BLOCK ||
+      (s>=MISSION_STATE_S4_FINE32_TRACK && s<=MISSION_STATE_S4_FINE42_FINISH_TURN_LEFT));
+  MaixCam_SetArrange02Active(s==MISSION_STATE_S5_REVERSE_FOR_ARRANGE ||
+      s==MISSION_STATE_S4_TRACK_RIGHT_BLOCK ||
+      (s>=MISSION_STATE_S4_FINE32_TRACK && s<=MISSION_STATE_S4_FINE42_FINISH_TURN_LEFT &&
+       s4_fixed_motion_ack==MAIXCAM_COMMAND_RIGHT_DONE_ACK));
   if(s==MISSION_STATE_FAULT || s==MISSION_STATE_STOPPED) MissionTask_StopWheels();
 }
 HAL_StatusTypeDef MaixCam_SendCommand(uint8_t cmd) {
@@ -108,12 +134,35 @@ HAL_StatusTypeDef MaixCam_SendCommand(uint8_t cmd) {
   assert(tx_count<sizeof(tx_commands));tx_commands[tx_count++]=cmd;
   if(cmd==0x14) ++acknowledgements;
   if(inject_stage_on_tx==cmd) { inject_stage_on_tx=0;rx(0x14);rx(0x24); }
+  if(cmd==0x44) {
+    assert(mission_snapshot.state==MISSION_STATE_S3_TRACK_GREEN);
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+    if(inject44_partial_tail) { inject44_partial_tail=false;byte(0x2F); }
+    if(inject44_event) { uint8_t e=inject44_event;inject44_event=0;rx(e); }
+    if(inject44_coord) { uint8_t id=inject44_coord;inject44_coord=0;coords(id); }
+  }
+  if((cmd==0x32 || cmd==0x42) && fine_inject_on_ack) {
+    uint8_t next=fine_inject_on_ack;fine_inject_on_ack=0;rx(next);coords(5);
+  }
   return tx_ok?HAL_OK:HAL_ERROR;
 }
 static bool MissionTask_HandleSupplementFinish(uint32_t t) { (void)t;return false; }
 static bool MissionTask_LoadCheckPausesMotion(void) { return false; }
+static bool MissionTask_HandleLoadCheckRequest(uint32_t now) { (void)now;return false; }
+static void MissionTask_DebugS3(uint32_t now) { (void)now; }
+static int16_t MissionTask_CalculateVisionForward(uint32_t t,int16_t e) { (void)t;(void)e;return 70; }
+static int16_t MissionTask_CalculateVisionTurn(uint32_t t,int16_t e) { (void)t;(void)e;return 7; }
+static void MissionTask_SetVisionTrackingTargets(int16_t f,int16_t r,int16_t cap) {
+  (void)cap;MissionTask_SetWheelTargets(f+r,f-r);
+}
+static void MissionTask_SwitchS7ToBlackGreen(uint32_t t) { (void)t;assert(false); }
+static bool MissionTask_CommandS4VisionTracking(uint32_t now,bool *arrived) {
+  (void)now;if(arrived) *arrived=false;
+  if(!mission_snapshot.vision_target_valid) { MissionTask_StopWheels();return false; }
+  MissionTask_SetWheelTargets(60,60);return true;
+}
+static void verify_s4_fine_arrange(void);
 static void MissionTask_SkipToS4FinalTrack(uint32_t t) { MissionTask_EnterState(MISSION_STATE_S4_RAISE_FRAME,t); }
-static void MissionTask_StartS4TrackState(MissionState s,uint32_t t) { MissionTask_EnterState(s,t); }
 static void verify_e4_event_buffering(void);
 static void verify_03_frame_down(void);
 static HAL_StatusTypeDef Actuator_SetFrameLowered(void) {
@@ -122,11 +171,25 @@ static HAL_StatusTypeDef Actuator_SetFrameLowered(void) {
   frame_down=true;return HAL_OK;
 }
 static HAL_StatusTypeDef Actuator_SetCameraWideView(void) { return HAL_OK; }
+static HAL_StatusTypeDef Actuator_SetCameraObjectTrackView(void) { return HAL_OK; }
+static HAL_StatusTypeDef Actuator_SetBaffleAngle(uint16_t angle) {
+  assert(angle==ROBOT_BAFFLE_DOWN_DEG); ++baffle_resume_calls; return Actuator_SetFrameLowered();
+}
+static HAL_StatusTypeDef Actuator_SetClawClosed(void) { return HAL_OK; }
+static void Actuator_DeferClawClose(uint32_t now) { (void)now;assert(frame_down); }
+static HAL_StatusTypeDef Actuator_SetClawAngle(uint16_t angle) {
+  assert(angle==ROBOT_CLAW_MATERIAL_OPEN_DEG || angle==ROBOT_CLAW_CASUALTY_OPEN_DEG);
+  assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+  return HAL_OK;
+}
 static uint32_t MissionTask_S4ScalePushDuration(uint32_t t,bool right) { (void)right;return t; }
 static uint32_t MissionTask_S4ReverseDuration(bool right) { (void)right;return 500; }
 static void MissionTask_CommandS4CornerPush(uint32_t t,bool right) { (void)t;MissionTask_SetWheelTargets(right?90:70,right?70:90); }
 static void MissionTask_CommandS4CornerReverse(uint32_t t,bool right) { (void)t;MissionTask_SetWheelTargets(right?-90:-70,right?-70:-90); }
 static bool MissionTask_RunS6TurnToHeading(uint32_t t,int32_t yaw) {
+  if(mission_snapshot.state>=MISSION_STATE_S4_E4_PUSH_RIGHT &&
+      mission_snapshot.state<=MISSION_STATE_S4_E4_REVERSE_LEFT)
+    return Real_GreenTurnToHeading(t,yaw);
   MissionTask_CalculateS6YawTurn(t,yaw);return turn_aligned;
 }
 static void MissionTask_CommandS6Straight(uint32_t t,int32_t yaw,int16_t rpm,int16_t max) {
@@ -134,14 +197,18 @@ static void MissionTask_CommandS6Straight(uint32_t t,int32_t yaw,int16_t rpm,int
 }
 static int16_t MissionTask_CalculateS6YawPid(uint32_t t,int32_t yaw,float min,float max) {
   selected_turn_limit=max;
-  if(mission_snapshot.state==MISSION_STATE_S4_E4_RED_SPIN_360)
+  if(mission_snapshot.state==MISSION_STATE_S4_E4_RED_SPIN_360 ||
+      (mission_snapshot.state>=MISSION_STATE_S4_E4_PUSH_RIGHT &&
+       mission_snapshot.state<=MISSION_STATE_S4_E4_REVERSE_LEFT))
     return Real_RedYawPid(t,yaw,min,max);
   return (int16_t)max;
 }
 '@
 $cases = @'
 static void setup(uint8_t target) {
+  s4_initial_green02_used=true;s4_initial_green02_active=false; //Legacy02 tests.
   fake_now=100;assert(MaixCam_Init(&uart)==HAL_OK);
+  s4_fine_next_left=true;fine_inject_on_ack=0;s4_fixed_motion_ack=MAIXCAM_COMMAND_SIDE_PUSH_DONE_ACK;
   memset(&mission_snapshot,0,sizeof(mission_snapshot));
   mission_snapshot.state=MISSION_STATE_S4_TRACK_CENTER;
   mission_snapshot.yaw_start_cdeg=35000;mission_snapshot.yaw_cdeg=100;
@@ -149,12 +216,16 @@ static void setup(uint8_t target) {
   s7_target_switch_enabled=true;s3_target_select_command=target;
   s4_material_e4_recovery_count=0;s4_green_e4_push_cycles=0;
   s4_green_e4_spin_exhausted=false;s4_e4_recovery_used=false;
+  s4_green_e4_half_turn_active=false;
+  vision_search_forward_active=vision_search_e3_mode=vision_search_green_e3_mode=false;
   s4_red_e4_align_away_active=false;
   s7_red_switch_sync_pending=s7_red_coordinate_fence_active=false;
   supplement_capture_active=supplement_budget_started=s5_empty_recovery_active=false;
   health_faults=tx_count=center_entries=acknowledgements=0;turn_aligned=false;
   tx_ok=true;inject_stage_on_tx=0;s4_e4_protocol_active=false;
-  frame_down=false;frame_lower_ok=true;frame_lower_calls=0;
+  inject44_event=inject44_coord=0;inject44_partial_tail=false;
+  frame_down=false;frame_lower_ok=true;frame_lower_calls=baffle_resume_calls=0;
+  s3_entry_pose_ready=false;
 }
 static void tick(uint32_t t) {
   fake_now=t;MissionTask_UpdateVisionInput(t);MissionTask_CheckRunningHealth(t);
@@ -183,6 +254,7 @@ static void second_loss(void) {
   assert(mission_snapshot.state_entry_tick==900 && s4_material_e4_recovery_count==2);
 }
 int main(void) {
+  verify_s4_fine_arrange();
   verify_red_e4_sweep();
   verify_03_frame_down();
   verify_e4_event_buffering();
@@ -233,7 +305,8 @@ int main(void) {
   tick(140);assert(s4_red_e4_align_away_active && selected_turn_limit==45);
   setup(0x21);s7_target_switch_enabled=false;MissionTask_StartS4E4Recovery(120);
   assert(mission_snapshot.state==MISSION_STATE_S4_E4_PUSH_RIGHT && s4_green_e4_push_cycles==1 && !s4_material_e4_recovery_count);
-  s4_green_e4_push_cycles=2;MissionTask_EnterState(MISSION_STATE_S4_TRACK_CENTER,140);
+  assert(ROBOT_S4_E4_GREEN_PUSH_MAX_CYCLES==1);
+  s4_green_e4_push_cycles=1;MissionTask_EnterState(MISSION_STATE_S4_TRACK_CENTER,140);
   MissionTask_StartS4E4Recovery(160);tick(180);
   assert(mission_snapshot.state==MISSION_STATE_S4_E4_GREEN_SPIN_360);
   assert(mission_snapshot.left_target_rpm==-ROBOT_YAW_LEFT_SIGN*20);
@@ -248,7 +321,8 @@ $eventCases = Get-Content (Join-Path $PSScriptRoot 'host/e4_event_cases.c') -Raw
 $frameCases = Get-Content (Join-Path $PSScriptRoot 'host/03_frame_cases.c') -Raw
 $redSweepCases = Get-Content (Join-Path $PSScriptRoot 'host/red_e4_sweep_cases.c') -Raw
 $redSweepPrototype = "`nstatic void verify_red_e4_sweep(void);`n"
-$code = $preamble+"`n"+$globals+"`n"+$prototypes+$redSweepPrototype+$parserInclude+$stubs+"`n"+($functions -join "`n")+"`n"+$arrangeWait+"`n"+$cases+"`n"+$eventCases+"`n"+$frameCases+"`n"+$redSweepCases
+$fineCases = Get-Content (Join-Path $PSScriptRoot 'host/s4_fine_arrange_cases.c') -Raw
+$code = $preamble+"`n"+$globals+"`n"+$prototypes+$redSweepPrototype+$parserInclude+$stubs+"`n"+($functions -join "`n")+"`n"+$arrangeWait+"`n"+$cases+"`n"+$eventCases+"`n"+$frameCases+"`n"+$redSweepCases+"`n"+$fineCases
 $code | & $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" -x c - -o $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host build failed' }
 & $testExe

@@ -192,7 +192,10 @@ static void OLED_TaskShowMission(void)
       text = "S4:TURN SIDE2   ";
       break;
     case MISSION_STATE_S4_FINAL_CENTER_OBJECT:
-      text = "S4:FINAL CENTER ";
+      text = "S4:34 ADVANCE   ";
+      break;
+    case MISSION_STATE_S4_FINAL_TURN_SAFE:
+      text = "S4:34 TURN SAFE ";
       break;
     case MISSION_STATE_S4_FINAL_LOWER_FRAME:
       text = "S4:FRAME DOWN   ";
@@ -270,14 +273,8 @@ static void OLED_TaskShowMission(void)
     case MISSION_STATE_S7_SILENT_TURN_BACK:
       text = "S7:SILENT RIGHT ";
       break;
-    case MISSION_STATE_S6_RAISE_FRAME:
-      text = "S6:FRAME UP      ";
-      break;
-    case MISSION_STATE_S6_PRE_PUSH_REVERSE:
-      text = "S6:PRE REVERSE  ";
-      break;
-    case MISSION_STATE_S6_FINAL_PUSH:
-      text = "S6:FINAL PUSH    ";
+    case MISSION_STATE_S6_BORDER_LOCATE:
+      text = "S6:BORDER LOCATE";
       break;
     case MISSION_STATE_S6_FINAL_REVERSE:
       text = "S6:FINAL REVERSE";

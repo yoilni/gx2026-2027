@@ -6,22 +6,44 @@
 /* Initializes the production servo outputs used before the RTOS starts. */
 HAL_StatusTypeDef Actuator_Init(void);
 
-/* Starts/updates PA2 CH3 and PA3 CH4, then continuously holds the collection
-   frame at its calibrated raised position. Safe to call more than once. */
-HAL_StatusTypeDef Actuator_SetFrameRaised(void);
+/* Arrange-release pose: PA2 up (unless suspended), PA3 open for the cargo. */
+HAL_StatusTypeDef Actuator_SetBaffleUpClawOpen(uint16_t claw_angle_deg);
 
-/* Lowers the two mirrored collection-frame servos to their calibrated down
-   endpoints and continuously holds them there. */
+/* Search/retain pose: PA2 down (unless suspended), PA3 closed. */
 HAL_StatusTypeDef Actuator_SetFrameLowered(void);
 
-/* Raises each mirrored servo from its calibrated down endpoint by the given
-   command-angle amount, clamped at its normal raised endpoint. */
+/* Legacy mirrored-frame bench test only. */
 HAL_StatusTypeDef Actuator_SetFramePartiallyRaised(uint16_t lift_angle_deg);
 
-/* Restores PA5/TIM2 CH1 to the calibrated 80-degree search view. */
+/* Updates only PA3/TIM2 CH4. Requires Actuator_Init to have enabled CH4 PWM;
+   leaves PA2 and PA5 alone and keeps the PWM running. */
+HAL_StatusTypeDef Actuator_SetClawAngle(uint16_t angle_deg);
+HAL_StatusTypeDef Actuator_SetClawClosed(void);
+/* Allow PA2 to lower while PA3 stays open. Normal close requests are queued
+   until the guard expires; a newer open pose cancels the queued close. */
+void Actuator_DeferClawClose(uint32_t now);
+uint8_t Actuator_ClawCloseDeferred(void);
+HAL_StatusTypeDef Actuator_ServiceDeferredClawClose(uint32_t now);
+void Actuator_CancelDeferredClawClose(void);
+
+/* PA2/TIM2 CH3 only. Suspension persists through paired pose commands;
+   explicitly setting a baffle angle resumes PWM. */
+HAL_StatusTypeDef Actuator_SetBaffleAngle(uint16_t angle_deg);
+HAL_StatusTypeDef Actuator_StopBafflePwm(void);
+
+/* Restores PA5/TIM2 CH1 to the 140-degree startup/04/material capture view. */
 HAL_StatusTypeDef Actuator_SetCameraWideView(void);
 
-/* Moves PA5/TIM2 CH1 to the calibrated 45-degree close view and holds it. */
+/* PA5/TIM2 CH1 view for object tracking in 03, including supplement 03. */
+HAL_StatusTypeDef Actuator_SetCameraObjectTrackView(void);
+
+/* Uses the dedicated PA5/TIM2 CH1 view for safe-zone search and tracking. */
+HAL_StatusTypeDef Actuator_SetCameraSafeZoneView(void);
+
+/* Moves PA5/TIM2 CH1 to the common wide capture view in24. */
+HAL_StatusTypeDef Actuator_SetCameraFinalTrackView(void);
+
+/* Moves PA5/TIM2 CH1 to the calibrated load-check close view and holds it. */
 HAL_StatusTypeDef Actuator_SetCameraNearView(void);
 
 #endif /* ACTUATOR_TASK_H */

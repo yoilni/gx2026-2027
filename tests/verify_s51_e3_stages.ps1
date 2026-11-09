@@ -15,7 +15,7 @@ function Extract-Function([string]$name) {
   }
   $source.Substring($match.Index, $cursor - $match.Index)
 }
-$names = @('MissionTask_WrapYaw', 'MissionTask_YawError', 'MissionTask_Abs32',
+$names = @('MissionTask_S7MaterialOnly', 'MissionTask_WrapYaw', 'MissionTask_YawError', 'MissionTask_Abs32',
   'MissionTask_HeadingTurnExpired', 'MissionTask_RunS3GreenE3Recovery',
   'MissionTask_ClampFloat', 'MissionTask_GetSafeZoneYawOffset',
   'MissionTask_ResetVisionControllerState', 'MissionTask_ResetVisionPid',
@@ -35,12 +35,18 @@ $names += @('MissionTask_StartS4Post22Recovery', 'MissionTask_ResumeS3FromPost22
   'MissionTask_RunS6TurnToHeading', 'MissionTask_RunS6ExitTurn180',
   'MissionTask_StartS7Decision', 'MissionTask_ResetSupplement',
   'MissionTask_RunS7Decision', 'MissionTask_DebugYaw',
-  'MissionTask_DebugVisionAge', 'MissionTask_DebugAngles',
-  'MissionTask_S4FinalFrameLowerSettleMs')
+  'MissionTask_DebugVisionAge', 'MissionTask_DebugAngles')
+$names += @('MissionTask_GetSelectedObjectId', 'MissionTask_GetCarriedObjectId', 'MissionTask_S6IsSupplyTarget',
+  'MissionTask_ResetS6BorderProgress', 'MissionTask_StopS6DeliveryBafflePwm',
+  'MissionTask_RunS6BorderLocate', 'MissionTask_RunS6FinalReverse',
+  'MissionTask_SetS1Phase', 'MissionTask_DecodeStartZone', 'MissionTask_StartS1',
+  'MissionTask_ProcessEvents')
 $functions = @($names | ForEach-Object { Extract-Function $_ })
 $prototypes = ($functions | ForEach-Object { $_.Substring(0, $_.IndexOf('{')).TrimEnd() + ';' }) -join "`n"
 $start = $source.IndexOf('static osThreadId_t mission_task_handle;')
 $globals = $source.Substring($start, $source.IndexOf('static const osThreadAttr_t mission_task_attributes') - $start)
+$eventBegin = $source.IndexOf('#define MISSION_EVENT_START')
+$eventDefines = $source.Substring($eventBegin, $start - $eventBegin)
 $arrange = Extract-Function 'MissionTask_RunS4Arrange'
 $waitBegin = $arrange.IndexOf('    case MISSION_STATE_S4_WAIT_FINAL_READY:')
 $waitEnd = $arrange.IndexOf('    case MISSION_STATE_S4_ARRANGE_RECOVERY_REVERSE:', $waitBegin)
@@ -69,13 +75,17 @@ unsigned fake_rx_arms;
 '@
 $stubs = @'
 static UART_HandleTypeDef uart;
-static unsigned rx_bytes, tx_count, red_switches, center_entries;
+static unsigned rx_bytes, tx_count, red_switches, center_entries, track_view_calls;
 static unsigned yaw_prints, age_prints, angle_prints;
 static char yaw_log[128], age_log[128], angle_log[128];
 static uint8_t tx_commands[64];
 static uint8_t inject_red_on_tx, inject_red_event, inject_red_frame_kind;
 static uint8_t inject_exit_on_tx;
 static bool frame_down;
+static bool claw_release_ok;
+static uint16_t delivery_claw;
+static bool deferred_close;
+static uint32_t deferred_close_tick;
 static uint32_t health_faults;
 static void byte(uint8_t b) {
   ++rx_bytes; maixcam_rx_byte=b; MaixCam_UART_RxCpltCallback(maixcam_uart);
@@ -105,13 +115,38 @@ static void MissionTask_SetWheelTargets(int16_t l,int16_t r) {
 }
 static void MissionTask_DebugS6(uint32_t now) { (void)now; }
 static HAL_StatusTypeDef Actuator_SetFrameLowered(void) { frame_down=true;return HAL_OK; }
-static HAL_StatusTypeDef Actuator_SetCameraWideView(void) { return HAL_OK; }
+static HAL_StatusTypeDef Actuator_StopBafflePwm(void) { return HAL_OK; }
+static HAL_StatusTypeDef Actuator_SetBaffleAngle(uint16_t angle) {
+  assert(angle==ROBOT_BAFFLE_DOWN_DEG || angle==ROBOT_S6_PUSH_BAFFLE_DEG || angle==ROBOT_BAFFLE_UP_DEG);
+  frame_down=angle==ROBOT_BAFFLE_DOWN_DEG;return HAL_OK;
+}
+static HAL_StatusTypeDef Actuator_SetClawClosed(void) {
+  delivery_claw=ROBOT_CLAW_CLOSED_DEG;return HAL_OK;
+}
+static HAL_StatusTypeDef Actuator_SetClawAngle(uint16_t angle) {
+  assert(angle==ROBOT_CLAW_MATERIAL_OPEN_DEG || angle==ROBOT_CLAW_CASUALTY_OPEN_DEG ||
+      angle==ROBOT_CLAW_MATERIAL_RELEASE_DEG || angle==ROBOT_CLAW_CASUALTY_RELEASE_DEG);
+  if(!claw_release_ok) return HAL_ERROR;
+  delivery_claw=angle;return HAL_OK;
+}
+static void Actuator_DeferClawClose(uint32_t now) {
+  assert(frame_down);deferred_close=true;deferred_close_tick=now;
+}
+static void service_claw_close(uint32_t now) {
+  if(deferred_close && (uint32_t)(now-deferred_close_tick)>=ROBOT_S6_EXIT_BAFFLE_SETTLE_MS) {
+    deferred_close=false;delivery_claw=ROBOT_CLAW_CLOSED_DEG;
+  }
+}
+static void MissionTask_CommandS6Straight(uint32_t t,int32_t yaw,int16_t rpm,int16_t max) {
+  (void)t;(void)yaw;(void)max;mission_snapshot.vision_forward_rpm=rpm;MissionTask_SetWheelTargets(rpm,rpm);
+}
+static HAL_StatusTypeDef Actuator_SetCameraObjectTrackView(void) { ++track_view_calls;return HAL_OK; }
 HAL_StatusTypeDef MaixCam_SendCommand(uint8_t cmd) {
   if(cmd==0x03) assert(frame_down);
   assert(tx_count<sizeof(tx_commands)); tx_commands[tx_count++]=cmd;
   if(cmd==0x03 && inject_exit_on_tx) {
     uint8_t reply=inject_exit_on_tx; inject_exit_on_tx=0;
-    if(reply==0x04) coords(4);
+    if(reply==0x04) coords(s3_target_select_command==0x51 || s3_target_select_command==0x31?6:4);
     rx(reply);
   }
   if(inject_red_on_tx==cmd) {
@@ -120,7 +155,8 @@ HAL_StatusTypeDef MaixCam_SendCommand(uint8_t cmd) {
       // Complete the old coordinate that started before11/03.
       byte(30); byte(2); byte(0x1F); byte(0x2F);
     }
-    coords(6); coords(4); // Reference isolation must reject even an old ID4.
+    if(cmd!=0x03) { coords(6);coords(4); } // Old-reference coordinates before03.
+    if(inject_red_frame_kind==5) coords(4); // First new ID4 immediately on03.
     if(inject_red_frame_kind==1 || inject_red_frame_kind==4) rx(inject_red_event);
     if(inject_red_frame_kind==2) {
       byte(0xF1); byte(0xF2); byte(inject_red_event); byte(0x1F);
@@ -133,13 +169,17 @@ HAL_StatusTypeDef MaixCam_SendCommand(uint8_t cmd) {
 }
 static void MissionTask_EnterState(MissionState s,uint32_t t) {
   if(mission_snapshot.state==s) return;
+  if(s6_border_baffle_hold_active && s!=MISSION_STATE_S6_BORDER_BACKOFF &&
+      s!=MISSION_STATE_S6_FINAL_PUSH && !MissionTask_StopS6DeliveryBafflePwm()) s=MISSION_STATE_FAULT;
   mission_snapshot.state=s; mission_snapshot.state_entry_tick=t;
+  if(s==MISSION_STATE_S6_BORDER_LOCATE || s==MISSION_STATE_S6_FINAL_PUSH) MissionTask_ResetS6BorderProgress(t);
   MaixCam_SetRecoveryLossFilter(MissionTask_ActiveRecoveryLossEvent());
   if(s==MISSION_STATE_S7_SEARCH_RED || s==MISSION_STATE_S7_WAIT_SECOND_E3 ||
       s==MISSION_STATE_S7_SEARCH_BLACK) {
     s7_last_message_tick=t; s7_last_coordinate_sequence=mission_snapshot.target_sequence;
   }
   if(s==MISSION_STATE_FAULT || s==MISSION_STATE_STOPPED || s==MISSION_STATE_WAIT_START) {
+    deferred_close=false;
     s51_e3_recovery_count=0; s51_second_e3_pending=false; MissionTask_StopWheels();
   }
 }
@@ -168,6 +208,9 @@ static void verify_post22_search(void);
 static void verify_exit180_events(void);
 static void verify_debug_period(void);
 static void verify_red_switch_event_fence(void);
+static void verify_material_delivery_policy(void);
+static void verify_casualty_delivery_policy(void);
+static void verify_initial_green_e3_spin(void);
 static uint32_t MissionTask_GetRequiredFaults(void) { return health_faults; }
 static bool MissionTask_HandleSupplementFinish(uint32_t t) { (void)t; return false; }
 static bool MissionTask_LoadCheckPausesMotion(void) { return false; }
@@ -191,19 +234,22 @@ static void setup(uint8_t zone,uint8_t team,int32_t zero) {
   mission_snapshot.safe_zone_yaw_target_cdeg=MissionTask_WrapYaw(zero+MissionTask_GetSafeZoneYawOffset(zone,team));
   mission_snapshot.yaw_cdeg=MissionTask_WrapYaw(zero+22000);
   s7_target_switch_enabled=true; s3_target_select_command=0x51;
+  s7_material_delivery_count=s7_casualty_delivery_count=0;
+  s7_delivery_counted=false;s7_material_only_reselect_pending=false;
   s7_red_switch_sync_pending=s7_red_coordinate_fence_active=false;
+  s4_post22_search_active=false;
   supplement_budget_started=supplement_capture_active=false;
   health_faults=0; tx_count=red_switches=center_entries=0; fake_now=100;
   inject_red_on_tx=inject_red_event=inject_red_frame_kind=0;
   inject_exit_on_tx=0;
-  frame_down=false;
+  frame_down=false;claw_release_ok=true;delivery_claw=ROBOT_CLAW_CLOSED_DEG;deferred_close=false;
   assert(MissionTask_BeginS3Vision(fake_now)); assert(!s51_e3_recovery_count);
   assert(tx_count==2 && tx_commands[0]==0x51 && tx_commands[1]==0x03);
 }
 static void first_and_second(void) {
   rx(0xE3); tick(120);
   assert(s51_e3_recovery_count==1 && mission_snapshot.state==MISSION_STATE_S3_SEARCH_TURN_CW);
-  tick(140); assert(mission_snapshot.left_target_rpm==-80 && vision_search_forward_ms==800);
+  tick(140); assert(mission_snapshot.left_target_rpm==80 && vision_search_forward_ms==800);
   rx(0xE3); tick(620);
   assert(s51_e3_recovery_count==1 && mission_snapshot.state_entry_tick==120);
   coords(6); tick(640);
@@ -214,6 +260,36 @@ static void first_and_second(void) {
   assert(mission_snapshot.state==MISSION_STATE_S3_E3_TURN_AWAY);
   assert(s3_search_yaw_target_cdeg==MissionTask_WrapYaw(mission_snapshot.safe_zone_yaw_target_cdeg+18000));
   assert(vision_search_forward_rpm==100 && vision_search_forward_ms==1200);
+}
+static void verify_s51_forward_recovery(void) {
+  assert(ROBOT_S51_E3_FORWARD_RPM==80 && ROBOT_S51_E3_FORWARD_MS==800);
+  for(unsigned silent=0;silent<2;++silent) for(unsigned wrap=0;wrap<2;++wrap) {
+    setup(3,ROBOT_TEAM_BLUE,35000);
+    uint32_t start=wrap?UINT32_MAX-100U:1000U;
+    fake_now=start;
+    if(silent) MissionTask_StartVisionSearchRecovery(start,MISSION_STATE_S3_TRACK_GREEN,mission_snapshot.yaw_cdeg,false);
+    else { rx(0xE3);tick(start); }
+    assert(s51_e3_recovery_count==(silent?0:1));
+    tick(start+20U);
+    assert(mission_snapshot.left_target_rpm==80 && mission_snapshot.right_target_rpm==80);
+    rx(0xE3);tick(start+100U);
+    assert(mission_snapshot.state_entry_tick==start && s51_e3_recovery_count==(silent?0:1));
+    tick(start+799U);
+    assert(vision_search_forward_active && mission_snapshot.left_target_rpm==80 && mission_snapshot.right_target_rpm==80);
+    tick(start+800U);
+    assert(!vision_search_forward_active && mission_snapshot.state==MISSION_STATE_S3_SEARCH_TURN_CCW);
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+    tick(start+820U);
+    assert(mission_snapshot.left_target_rpm==-ROBOT_YAW_LEFT_SIGN*25 && mission_snapshot.right_target_rpm==ROBOT_YAW_LEFT_SIGN*25);
+    fake_now=start+840U;coords(6);tick(fake_now);
+    assert(mission_snapshot.state==MISSION_STATE_S3_TRACK_GREEN && tx_count==2);
+    assert(s51_e3_recovery_count==(silent?0:1));
+  }
+  //Only ordinary51 changes; standalone31 still uses its legacy backward leg.
+  setup(3,ROBOT_TEAM_BLUE,0);s3_target_select_command=0x31;
+  rx(0xE3);tick(120);tick(140);
+  assert(!s51_e3_recovery_count && vision_search_forward_rpm==-80 && mission_snapshot.left_target_rpm==-80);
+  puts("PASS:ordinary51 E3/silent recovery F80/800 then gyro CCW360,799/800ms and tick wrap,duplicates cannot restart/count,ID6 resume without51/03 reinit;standalone31 stays backward");
 }
 static uint32_t align_away(void) {
   tick(680);
@@ -269,6 +345,10 @@ static void red_sweep_parser_cases(void) {
   }
 }
 int main(void) {
+  verify_initial_green_e3_spin();
+  verify_material_delivery_policy();
+  verify_casualty_delivery_policy();
+  verify_s51_forward_recovery();
   red_sweep_parser_cases();
   verify_red_switch_event_fence();
   verify_debug_period();
@@ -294,9 +374,9 @@ int main(void) {
     }
     assert(e3_spin_progress_cdeg==36000 && mission_snapshot.state==MISSION_STATE_S3_TRACK_GREEN);
     assert(s51_e3_recovery_count==2 && s3_search_sweep_completed && tx_count==2);
-    // Only E3#2 changed; E3#3 retains the existing generic recovery.
+    // E3#3 uses the ordinary51 forward search, not another special second leg.
     rx(0xE3); tick(4000); tick(4020);
-    assert(s51_e3_recovery_count==3 && mission_snapshot.left_target_rpm==-80 && vision_search_forward_ms==800);
+    assert(s51_e3_recovery_count==3 && mission_snapshot.left_target_rpm==80 && vision_search_forward_ms==800);
     MissionTask_EnterState(MISSION_STATE_S3_LOWER_FRAME,4500);
     assert(MissionTask_BeginS3Vision(4520) && !s51_e3_recovery_count);
   }
@@ -322,7 +402,7 @@ int main(void) {
   mission_snapshot.vision_target_valid=false;
   MissionTask_StartVisionSearchRecovery(1300,MISSION_STATE_S3_TRACK_GREEN,0,false);
   assert(s51_e3_recovery_count==2 && mission_snapshot.state==MISSION_STATE_S3_SEARCH_TURN_CW);
-  assert(vision_search_forward_rpm==-80 && vision_search_forward_ms==800);
+  assert(vision_search_forward_rpm==80 && vision_search_forward_ms==800);
   // Preserve fault-stop coverage in the new phase and both heading/spin deadlines.
   setup(3,ROBOT_TEAM_BLUE,0); first_and_second(); health_faults=MISSION_FAULT_IMU; tick(680);
   assert(mission_snapshot.state==MISSION_STATE_FAULT && !mission_snapshot.left_target_rpm);
@@ -334,17 +414,13 @@ int main(void) {
   tick(680U+turn_timeout);assert(mission_snapshot.left_target_rpm==100);
   setup(3,ROBOT_TEAM_BLUE,0); first_and_second(); uint32_t start=align_away(); tick(start+1200); tick(start+21200);
   assert(mission_snapshot.state==MISSION_STATE_FAULT && !mission_snapshot.left_target_rpm);
-  // Supplement budget and initial-green/red/04 recovery profiles are unchanged.
+  // Supplement/red/04 profiles stay separate from the new green360 path.
   setup(3,ROBOT_TEAM_BLUE,0); supplement_budget_started=supplement_capture_active=true;
   rx(0xE3); tick(120); assert(!s51_e3_recovery_count && vision_search_forward_rpm==-80);
   setup(3,ROBOT_TEAM_BLUE,0); s7_target_switch_enabled=false; s3_target_select_command=0x21;
   rx(0xE3); tick(120); assert(!s51_e3_recovery_count && vision_search_green_e3_mode && vision_search_forward_rpm==80);
-  tick(920);assert(s3_green_e3_phase==S3_GREEN_E3_TURN_LEFT && mission_snapshot.state_entry_tick==920);
-  tick(920U+turn_timeout-1U);assert(s3_green_e3_phase==S3_GREEN_E3_TURN_LEFT);
-  tick(920U+turn_timeout);assert(s3_green_e3_phase==S3_GREEN_E3_TURN_RIGHT && mission_snapshot.state_entry_tick==920U+turn_timeout);
-  tick(920U+2U*turn_timeout-1U);assert(s3_green_e3_phase==S3_GREEN_E3_TURN_RIGHT);
-  tick(920U+2U*turn_timeout);assert(s3_green_e3_phase==S3_GREEN_E3_TURN_BACK && mission_snapshot.state_entry_tick==920U+2U*turn_timeout);
-  tick(920U+3U*turn_timeout);assert(mission_snapshot.state==MISSION_STATE_S3_TRACK_GREEN && !mission_snapshot.fault_flags);
+  tick(920);assert(s3_green_e3_phase==S3_GREEN_E3_SPIN_CCW && mission_snapshot.state_entry_tick==920);
+  tick(920U+3U*turn_timeout);assert(mission_snapshot.state==MISSION_STATE_S3_SEARCH_TURN_CCW && !mission_snapshot.fault_flags);
   setup(3,ROBOT_TEAM_BLUE,0); s3_target_select_command=0x11; s7_red_recovery_used=false;
   rx(0xE3); tick(120); assert(!s51_e3_recovery_count && s7_red_recovery_used && vision_search_forward_rpm==80);
   setup(3,ROBOT_TEAM_BLUE,0); MissionTask_StartVisionSearchRecovery(120,MISSION_STATE_S4_TRACK_CENTER,0,false);
@@ -360,7 +436,7 @@ int main(void) {
   assert(red_switches==1 && s3_target_select_command==0x11 && !s51_e3_recovery_count);
   // Saturate without wrapping back to the second profile.
   setup(3,ROBOT_TEAM_BLUE,0); s51_e3_recovery_count=UINT16_MAX;
-  rx(0xE3); tick(120); assert(s51_e3_recovery_count==UINT16_MAX && vision_search_forward_rpm==-80);
+  rx(0xE3); tick(120); assert(s51_e3_recovery_count==UINT16_MAX && vision_search_forward_rpm==80);
   assert(rx_bytes>0 && fake_rx_arms>=rx_bytes);
   puts("PASS: ordinary51 E3 count, second mapped-away turn +100rpm/1200ms +gyro CCW360; all zone/team headings, duplicate/fresh/stale gates, interruptions, reset/saturation, health/timeouts and legacy profiles");
 }
@@ -369,10 +445,12 @@ $parserPath = (Join-Path $projectRoot 'maixcam/maixcam_task.c').Replace('\','/')
 $parserInclude = "`n#define MaixCam_SendCommand Parser_SendCommand`n#include `"$parserPath`"`n#undef MaixCam_SendCommand`n"
 $post22Cases = Get-Content (Join-Path $PSScriptRoot 'host/post22_search_cases.c') -Raw
 $exit180Cases = Get-Content (Join-Path $PSScriptRoot 'host/exit180_event_cases.c') -Raw
+$materialTripCases = Get-Content (Join-Path $PSScriptRoot 'host/material_delivery_cases.c') -Raw
 $debugCases = Get-Content (Join-Path $PSScriptRoot 'host/debug_period_cases.c') -Raw
 $redFenceCases = Get-Content (Join-Path $PSScriptRoot 'host/red_switch_event_cases.c') -Raw
+$greenE3Cases = Get-Content (Join-Path $PSScriptRoot 'host/s3_green_e3_cases.c') -Raw
 $testSource = Join-Path $outputDir 'verify_s51_e3_stages.c'
-[IO.File]::WriteAllText($testSource,$preamble+"`n"+$globals+"`n"+$prototypes+$parserInclude+$stubs+"`n"+($functions -join "`n")+"`n"+$post22Wait+"`n"+$cases+"`n"+$post22Cases+"`n"+$exit180Cases+"`n"+$debugCases+"`n"+$redFenceCases,[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText($testSource,$preamble+"`n"+$eventDefines+"`n"+$globals+"`n"+$prototypes+$parserInclude+$stubs+"`n"+($functions -join "`n")+"`n"+$post22Wait+"`n"+$cases+"`n"+$post22Cases+"`n"+$exit180Cases+"`n"+$debugCases+"`n"+$redFenceCases+"`n"+$materialTripCases+"`n"+$greenE3Cases,[Text.UTF8Encoding]::new($false))
 $testExe = Join-Path $outputDir 'verify_s51_e3_stages.exe'
 & $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" $testSource -o $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host build failed' }

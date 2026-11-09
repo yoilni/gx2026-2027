@@ -15,7 +15,7 @@
 #define SERVO_TEST_TIMER_ARR          19999U
 
 static osThreadId_t servo_test_task_handle;
-static volatile uint16_t servo_test_pulse_us = ROBOT_MG90_TEST_PULSE_US;
+static volatile uint16_t servo_test_pulse_us = ROBOT_MG90_TEST_START_PULSE_US;
 
 static const osThreadAttr_t servo_test_task_attributes = {
   .name = "servoTestTask",
@@ -69,11 +69,27 @@ void StartServoTestTask(void *argument)
     osThreadExit();
     return;
   }
-  /* Actuator_Init already starts CH1; frame PWM and mission tasks stay off. */
+  /* Actuator_Init starts CH1 and the independently enabled PA2/PA3 tests.
+     The mission stays off; an optional one-shot wheel test runs separately.
+     TIM2 keeps enabled PWM outputs running. */
+#if ROBOT_MG90_TEST_WIDE_HOLD_MS > 0U
+  DebugUart_Logf("[TEST] MG90 wide=%u hold=%u\r\n",
+                (unsigned)ROBOT_CAMERA_WIDE_ANGLE_DEG,
+                (unsigned)ROBOT_MG90_TEST_WIDE_HOLD_MS);
+  (void)osDelay(ROBOT_MG90_TEST_WIDE_HOLD_MS);
+#endif
   ServoTest_SetMg90Pulse(ROBOT_MG90_TEST_PULSE_US);
   DebugUart_Logf("[TEST] MG90 angle=%u pwm=%u\r\n",
                 (unsigned)ROBOT_MG90_TEST_ANGLE_DEG,
                 (unsigned)ROBOT_MG90_TEST_PULSE_US);
+#if ROBOT_BAFFLE_TEST_ENABLED
+  DebugUart_Logf("[TEST] PA2 baffle=%u\r\n",
+                (unsigned)ROBOT_BAFFLE_TEST_ANGLE_DEG);
+#endif
+#if ROBOT_CLAW_TEST_ENABLED
+  DebugUart_Logf("[TEST] PA3 claw=%u\r\n",
+                (unsigned)ROBOT_CLAW_TEST_ANGLE_DEG);
+#endif
   next_wake = osKernelGetTickCount();
 
   for (;;)

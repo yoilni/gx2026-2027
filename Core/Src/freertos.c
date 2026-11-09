@@ -62,14 +62,14 @@ static const osThreadAttr_t imuTask_attributes = {
   .stack_size = 256U * 4U,
   .priority = osPriorityBelowNormal,
 };
-#if !ROBOT_MG90_SPEED_TEST_ENABLED && !ROBOT_FRAME_DOWN_TEST_ENABLED
+#if ROBOT_STRAIGHT_TEST_ENABLED || (!ROBOT_MG90_SPEED_TEST_ENABLED && !ROBOT_FRAME_DOWN_TEST_ENABLED)
 static osThreadId_t motorTaskHandle;
 #endif
 #if ROBOT_OLED_ENABLED
 static osThreadId_t oledTaskHandle;
 #endif
 
-#if !ROBOT_MG90_SPEED_TEST_ENABLED && !ROBOT_FRAME_DOWN_TEST_ENABLED
+#if ROBOT_STRAIGHT_TEST_ENABLED || (!ROBOT_MG90_SPEED_TEST_ENABLED && !ROBOT_FRAME_DOWN_TEST_ENABLED)
 static const osThreadAttr_t motorTask_attributes = {
   .name = "motorTask",
   .stack_size = 256U * 4U,
@@ -135,7 +135,7 @@ void MX_FREERTOS_Init(void) {
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-#if !ROBOT_MG90_SPEED_TEST_ENABLED && !ROBOT_FRAME_DOWN_TEST_ENABLED
+#if ROBOT_STRAIGHT_TEST_ENABLED || (!ROBOT_MG90_SPEED_TEST_ENABLED && !ROBOT_FRAME_DOWN_TEST_ENABLED)
   motorTaskHandle = osThreadNew(StartMotorTask, NULL, &motorTask_attributes);
 #endif
 #if ROBOT_OLED_ENABLED
@@ -159,12 +159,13 @@ void MX_FREERTOS_Init(void) {
   {
     Error_Handler();
   }
-#elif ROBOT_STRAIGHT_TEST_ENABLED
+#endif
+#if ROBOT_STRAIGHT_TEST_ENABLED
   if ((motorTaskHandle == NULL) || !MotorTestTask_Create())
   {
     Error_Handler();
   }
-#elif !ROBOT_FRAME_DOWN_TEST_ENABLED
+#elif !ROBOT_MG90_SPEED_TEST_ENABLED && !ROBOT_FRAME_DOWN_TEST_ENABLED
   if ((motorTaskHandle == NULL) || !MissionTask_Create() || !StartButtonTask_Create())
   {
     Error_Handler();

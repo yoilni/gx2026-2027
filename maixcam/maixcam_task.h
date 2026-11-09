@@ -34,6 +34,7 @@
 #define MAIXCAM_COMMAND_SEARCH_TARGET 0x03U
 #define MAIXCAM_COMMAND_TRACK_CENTER_ACK 0x04U
 #define MAIXCAM_COMMAND_RECHECK_LOAD 0x05U
+#define MAIXCAM_COMMAND_CASUALTY_ADJUST_DONE 0x45U
 #define MAIXCAM_COMMAND_CENTER_RECOVERY_DONE 0x44U
 #define MAIXCAM_COMMAND_FINAL_RECOVERY_DONE 0xF1U
 #define MAIXCAM_COMMAND_SELECT_BLACK_GREEN 0x51U
@@ -43,8 +44,14 @@
 #define MAIXCAM_COMMAND_CENTER_ACK    0x14U
 #define MAIXCAM_COMMAND_RIGHT_DONE_ACK 0x12U
 #define MAIXCAM_COMMAND_LEFT_DONE_ACK 0x22U
+#define MAIXCAM_COMMAND_OFFSET_PUSH_DONE_ACK 0x32U
+#define MAIXCAM_COMMAND_SIDE_PUSH_DONE_ACK 0x42U
 #define MAIXCAM_COMMAND_FINAL_CAPTURE 0x24U
+/* First post07 supply secured; MaixCAM skips05 and waits for51/03. */
+#define MAIXCAM_COMMAND_FIRST_SUPPLY_CAPTURE_DONE 0x34U
 #define MAIXCAM_COMMAND_OBSTACLE_DONE_ACK 0x36U
+#define MAIXCAM_COMMAND_BAR_SHIFT_DONE_ACK 0x46U
+#define MAIXCAM_COMMAND_START_ZONE_AVOID_DONE 0xAEU
 #define MAIXCAM_COMMAND_ANALYZE_LOAD_RED  0x15U
 #define MAIXCAM_COMMAND_ANALYZE_LOAD_BLUE 0x25U
 #define MAIXCAM_COMMAND_SELECT_BLUE   0x01U
@@ -56,13 +63,19 @@
 #define MAIXCAM_EVENT_ARRANGE_READY   0x02U
 #define MAIXCAM_EVENT_CENTER_REACHED  0x14U
 #define MAIXCAM_EVENT_LEFT_TARGET_READY 0x12U
+#define MAIXCAM_EVENT_OFFSET_PUSH 0x32U
+#define MAIXCAM_EVENT_SIDE_PUSH 0x42U
 #define MAIXCAM_EVENT_SKIP_TO_FINAL_TRACK 0x24U
 #define MAIXCAM_EVENT_FINAL_OBJECT_IN_FRAME 0x34U
+#define MAIXCAM_EVENT_CASUALTY_REGRIP 0x54U
 #define MAIXCAM_EVENT_LOAD_CHECK_REQUEST 0x05U
+#define MAIXCAM_EVENT_CASUALTY_LOAD_ADJUST 0x45U
 #define MAIXCAM_EVENT_NO_ARRANGE_REQUIRED 0x06U
 #define MAIXCAM_EVENT_SAFE_ZONE_FOUND 0x16U
 #define MAIXCAM_EVENT_SAFE_ZONE_ALIGN_READY 0x26U
 #define MAIXCAM_EVENT_SAFE_ZONE_OBSTACLE 0x36U
+#define MAIXCAM_EVENT_SAFE_ZONE_BAR_SHIFT 0x46U
+#define MAIXCAM_EVENT_START_ZONE_AVOID 0xAEU
 #define MAIXCAM_EVENT_RED_PRIORITY_REQUEST 0x11U
 #define MAIXCAM_EVENT_ARRANGE_TARGET_LOST 0xE2U
 #define MAIXCAM_EVENT_SEARCH_TARGET_LOST 0xE3U
@@ -87,6 +100,10 @@ void MaixCam_ClearObject(void);
 /* Fence only coordinates at a reference-point change; keep short events,
    including an E3/04 frame still being parsed. Returns the sequence floor. */
 uint32_t MaixCam_FenceObjectReference(void);
+/*44 ->03 reference boundary: fence old coordinates and target-stage/loss
+   events, including partial frames, but preserve05/06/AE/11. Call BEFORE44;
+   new replies received during/after TX must never be cleared afterward. */
+uint32_t MaixCam_FenceSearchReference(void);
 void MaixCam_ClearEvent(void);
 /* Clear recovery-era inputs, including11/26, without stopping UART reception.
    A frame already being parsed is discarded on completion, not aborted.
@@ -102,15 +119,38 @@ bool MaixCam_GetObject(MaixCam_Object *object);
 /* Copies last receipt even when invalidated; true means present, not fresh. */
 bool MaixCam_GetObjectSnapshot(MaixCam_Object *object);
 /* Ignore duplicate loss invalidation while the matching recovery is active.
-   During E4, duplicate E4 is dropped at receipt and14/02/24 are buffered in
+   During E4, duplicate E4 is dropped at receipt and14/02/24/32/42 are buffered in
    receipt order (one pending copy each) until the recovery hands them off. */
 void MaixCam_SetRecoveryLossFilter(uint8_t event_code);
-/* Extend stage-message buffering across the recovery's synchronous04/44 TX.
+/* Extend stage-message buffering across a recovery's synchronous04 TX.
    Disabling does not discard the queued messages. */
 void MaixCam_SetE4StageBuffering(bool enabled);
+/*32/42 have independent E4 loss retention while their fixed actions run.
+   Closing atomically returns/clears loss; ordinary events remain untouched. */
+void MaixCam_SetFineArrangeActive(bool active);
+/*02 shares42's ROI tracking/fixed states but always ACKs12. Suppress only
+   its own in-flight02 retries; a02 during42 remains a deferred decision. */
+void MaixCam_SetArrange02Active(bool active);
+bool MaixCam_FineArrangeLossPending(void);
+bool MaixCam_CloseFineArrange(void);
+/* Consume only a32/42 at the head of the event mailbox, atomically. */
+bool MaixCam_TakeFineArrangeRequest(uint8_t *command);
 bool MaixCam_DropEventIf(uint8_t event_code);
 /* Separate one-shot latch: 26 must survive other events during side moves. */
 bool MaixCam_TakeSafeZoneAlignRequest(void);
+/* Independent46 latch: retries never overwrite16 or26. While the maneuver
+   is active, suppress motion coordinates and26, not05 cargo reports/RX. */
+bool MaixCam_TakeBarShiftRequest(void);
+void MaixCam_SetBarShiftActive(bool active);
+/* AE is independent of ordinary stage events. Keep05/06 and cargo reports
+   live while fencing maneuver-era target coordinates/arrival/loss events.
+   Return the coordinate sequence at AE receipt to distinguish old retries
+   from a new avoidance request followed by/preceded by fresh coordinates. */
+bool MaixCam_TakeStartZoneAvoidanceRequest(uint32_t *coordinate_sequence);
+void MaixCam_SetStartZoneAvoidanceActive(bool active);
+/* First supplement E3's180 turn cannot be interrupted by turn-era motion
+   data.05/reports and independent AE stay live; release at the parked view. */
+void MaixCam_SetSupplementE3TurnActive(bool active);
 /* Discard26 during corner evacuation, including partial frames at its exit.
    UART parsing/rearming continues; a new26 is required after return. */
 void MaixCam_SetCornerEvacuationActive(bool active);
@@ -121,6 +161,9 @@ bool MaixCam_TakeEvent(uint8_t *event_code);
 bool MaixCam_PeekEvent(uint8_t *event_code);
 /* Separate latch so a subsequent E3/04 cannot overwrite the red-priority request. */
 bool MaixCam_TakeRedPriorityRequest(void);
+/* Red24/34 only. A54 follows a34 and cannot overwrite the regular event. */
+void MaixCam_SetCasualtyRegripEnabled(bool enabled);
+bool MaixCam_TakeCasualtyRegripRequest(void);
 /* Only after07 in task51: reserve zero-error ID5 frames as cargo reports,
    and latch06 independently so later events cannot overwrite cancellation. */
 void MaixCam_SetSupplementWindowEnabled(bool enabled);
@@ -147,5 +190,8 @@ bool MaixCam_LoadRecheckResultPending(void);
 void MaixCam_SetLoadRecheckEnabled(bool enabled);
 bool MaixCam_TakeLoadRecheckAck(void);
 bool MaixCam_TakeLoadRecheckFinish(MaixCam_Object *report);
+bool MaixCam_LoadRecheckFinishPending(void);
+bool MaixCam_TakeCasualtyLoadAdjust(MaixCam_Object *report);
+void MaixCam_SetCasualtyLoadAdjustActive(bool active);
 
 #endif /* MAIXCAM_TASK_H */
