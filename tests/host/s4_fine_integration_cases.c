@@ -93,13 +93,13 @@ static void verify_fixed_forward_without_yaw(void)
     MissionTask_EnterState(MISSION_STATE_S4_FINE42_FORWARD,100);
     s4_fine_forward_yaw_cdeg=35900;
     mission_snapshot.yaw_cdeg=MissionTask_WrapYaw(35900L-errors[e]);
-    s6_yaw_pid_update_tick=90;s6_yaw_pid_integral=123.0f;
+    s6_yaw_pid.update_tick=90;s6_yaw_pid.integral=123.0f;
     fake_now=120;coords(5,200,300);rx(a==0?0x02:0x42);fine_tick(120);
     assert(mission_snapshot.state==MISSION_STATE_S4_FINE42_FORWARD && mission_snapshot.state_entry_tick==100);
     assert(mission_snapshot.left_target_rpm==170 && mission_snapshot.right_target_rpm==170);
     assert(mission_snapshot.vision_forward_rpm==170 && !mission_snapshot.vision_turn_rpm);
     assert(!mission_snapshot.safe_zone_fixed_heading_active);
-    assert(s6_yaw_pid_update_tick==90 && s6_yaw_pid_integral==123.0f);
+    assert(s6_yaw_pid.update_tick==90 && s6_yaw_pid.integral==123.0f);
     fine_tick(449);
     assert(mission_snapshot.state==MISSION_STATE_S4_FINE42_FORWARD && !tx_count);
     assert(mission_snapshot.left_target_rpm==170 && mission_snapshot.right_target_rpm==170);

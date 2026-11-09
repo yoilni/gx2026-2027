@@ -2,6 +2,7 @@
 #include "boot_init.h"
 
 #include "robot_config.h"
+#include "servo_motion.h"
 #include "servo_pwm.h"
 
 static uint8_t baffle_pwm_suspended;
@@ -19,33 +20,6 @@ static uint8_t Actuator_DeferClawCommand(uint16_t angle_deg)
 static HAL_StatusTypeDef Actuator_SetFrameAngles(uint16_t left_angle_deg,
                                                  uint16_t right_angle_deg);
 
-static uint16_t Actuator_Mg90AngleToPulse(uint16_t angle_deg)
-{
-  if (angle_deg > 180U)
-  {
-    angle_deg = 180U;
-  }
-
-  return (uint16_t)(ROBOT_CAMERA_SERVO_MIN_PULSE_US +
-      (((uint32_t)angle_deg *
-        (ROBOT_CAMERA_SERVO_MAX_PULSE_US -
-         ROBOT_CAMERA_SERVO_MIN_PULSE_US)) / 180U));
-}
-
-static uint16_t Actuator_FrameAngleToPulse(uint16_t angle_deg)
-{
-  if (angle_deg > ROBOT_FRAME_SERVO_MAX_ANGLE_DEG)
-  {
-    angle_deg = ROBOT_FRAME_SERVO_MAX_ANGLE_DEG;
-  }
-
-  return (uint16_t)(ROBOT_FRAME_SERVO_MIN_PULSE_US +
-      (((uint32_t)angle_deg *
-        (ROBOT_FRAME_SERVO_MAX_PULSE_US -
-         ROBOT_FRAME_SERVO_MIN_PULSE_US)) /
-       ROBOT_FRAME_SERVO_MAX_ANGLE_DEG));
-}
-
 HAL_StatusTypeDef Actuator_Init(void)
 {
   uint16_t pulse_us;
@@ -58,9 +32,9 @@ HAL_StatusTypeDef Actuator_Init(void)
 #if ROBOT_MG90_SPEED_TEST_ENABLED
   pulse_us = ROBOT_MG90_TEST_START_PULSE_US;
 #elif ROBOT_FRAME_DOWN_TEST_ENABLED
-  pulse_us = Actuator_Mg90AngleToPulse(ROBOT_FRAME_TEST_CAMERA_ANGLE_DEG);
+  pulse_us = ServoMotion_CameraPulseUs(ROBOT_FRAME_TEST_CAMERA_ANGLE_DEG);
 #else
-  pulse_us = Actuator_Mg90AngleToPulse(ROBOT_CAMERA_WIDE_ANGLE_DEG);
+  pulse_us = ServoMotion_CameraPulseUs(ROBOT_CAMERA_WIDE_ANGLE_DEG);
 #endif
 
   /* PA5 is TIM2 CH1: initial bench pose or the configured mission wide view. */
@@ -77,7 +51,7 @@ HAL_StatusTypeDef Actuator_Init(void)
      the legacy mirrored-frame setter. Started channels hold in hardware. */
 #if ROBOT_BAFFLE_TEST_ENABLED
   ServoPwm_WritePulseUs(SERVO_PWM_BAFFLE,
-                        Actuator_FrameAngleToPulse(ROBOT_BAFFLE_TEST_ANGLE_DEG));
+                        ServoMotion_FramePulseUs(ROBOT_BAFFLE_TEST_ANGLE_DEG));
   if (ServoPwm_Start(SERVO_PWM_BAFFLE) != HAL_OK)
   {
     return HAL_ERROR;
@@ -85,7 +59,7 @@ HAL_StatusTypeDef Actuator_Init(void)
 #endif
 #if ROBOT_CLAW_TEST_ENABLED
   ServoPwm_WritePulseUs(SERVO_PWM_CLAW,
-                        Actuator_FrameAngleToPulse(ROBOT_CLAW_TEST_ANGLE_DEG));
+                        ServoMotion_FramePulseUs(ROBOT_CLAW_TEST_ANGLE_DEG));
   if (ServoPwm_Start(SERVO_PWM_CLAW) != HAL_OK)
   {
     return HAL_ERROR;
@@ -112,8 +86,8 @@ static HAL_StatusTypeDef Actuator_SetFrameAngles(uint16_t left_angle_deg,
     return HAL_ERROR;
   }
 
-  left_pulse_us = Actuator_FrameAngleToPulse(left_angle_deg);
-  right_pulse_us = Actuator_FrameAngleToPulse(right_angle_deg);
+  left_pulse_us = ServoMotion_FramePulseUs(left_angle_deg);
+  right_pulse_us = ServoMotion_FramePulseUs(right_angle_deg);
   if (baffle_pwm_suspended == 0U)
   {
     ServoPwm_WritePulseUs(SERVO_PWM_BAFFLE, left_pulse_us);
@@ -139,25 +113,14 @@ static HAL_StatusTypeDef Actuator_SetFrameAngles(uint16_t left_angle_deg,
 
 HAL_StatusTypeDef Actuator_SetBaffleAngle(uint16_t angle_deg)
 {
-  if (!ServoPwm_IsTimerValid()) return HAL_ERROR;
-  ServoPwm_WritePulseUs(SERVO_PWM_BAFFLE, Actuator_FrameAngleToPulse(angle_deg));
-  if (!ServoPwm_IsEnabled(SERVO_PWM_BAFFLE) &&
-      ServoPwm_Start(SERVO_PWM_BAFFLE) != HAL_OK)
-  {
-    return HAL_ERROR;
-  }
+  if (ServoMotion_SetBaffleAngle(angle_deg) != HAL_OK) return HAL_ERROR;
   baffle_pwm_suspended = 0U;
   return HAL_OK;
 }
 
 HAL_StatusTypeDef Actuator_StopBafflePwm(void)
 {
-  if (!ServoPwm_IsTimerValid()) return HAL_ERROR;
-  if (ServoPwm_IsEnabled(SERVO_PWM_BAFFLE) &&
-      ServoPwm_Stop(SERVO_PWM_BAFFLE) != HAL_OK)
-  {
-    return HAL_ERROR;
-  }
+  if (ServoMotion_StopBafflePwm() != HAL_OK) return HAL_ERROR;
   /* Paired pose setters must not write or restart PA2 while suspended. */
   baffle_pwm_suspended = 1U;
   return HAL_OK;
@@ -184,7 +147,7 @@ HAL_StatusTypeDef Actuator_SetClawAngle(uint16_t angle_deg)
   /* CH4 is already running; keep PWM continuous and do not move the baffle. */
   if (Actuator_DeferClawCommand(angle_deg) == 0U)
   {
-    ServoPwm_WritePulseUs(SERVO_PWM_CLAW, Actuator_FrameAngleToPulse(angle_deg));
+    return ServoMotion_SetClawAngle(angle_deg);
   }
   return HAL_OK;
 }
@@ -259,13 +222,7 @@ HAL_StatusTypeDef Actuator_SetFramePartiallyRaised(uint16_t lift_angle_deg)
 
 static HAL_StatusTypeDef Actuator_SetCameraAngle(uint16_t angle_deg)
 {
-  if (!ServoPwm_IsTimerValid())
-  {
-    return HAL_ERROR;
-  }
-
-  ServoPwm_WritePulseUs(SERVO_PWM_CAMERA, Actuator_Mg90AngleToPulse(angle_deg));
-  return HAL_OK;
+  return ServoMotion_SetCameraAngle(angle_deg);
 }
 
 HAL_StatusTypeDef Actuator_SetCameraWideView(void)

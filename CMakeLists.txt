@@ -67,8 +67,6 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-        M2006/M2006_PID.c
-        M2006/M2006_Speed.c
         M2006/M2006_task.c
         OLED/oled_task.c
         Core/Src/led_task.c

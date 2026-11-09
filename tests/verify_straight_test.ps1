@@ -17,7 +17,7 @@ function Extract-Function([string]$source, [string]$name) {
   $source.Substring($match.Index, $cursor - $match.Index)
 }
 $motorDefines = ([regex]::Matches($motorSource, '(?m)^#define MOTOR_TEST_[^\r\n]+') | ForEach-Object Value) -join "`n"
-$speedHeader = Get-Content (Join-Path $projectRoot 'M2006/M2006_Speed.h') -Raw
+$speedHeader = Get-Content (Join-Path $projectRoot 'User/Motion/WheelSpeed/inc/M2006_Speed.h') -Raw
 $feedbackDefine = [regex]::Match($speedHeader, '(?m)^#define M2006_FEEDBACK_TIMEOUT_MS[^\r\n]+').Value
 if (-not $feedbackDefine) { throw 'Missing actual feedback timeout' }
 $begin = $motorSource.IndexOf('static osThreadId_t motor_test_task_handle;')

@@ -62,27 +62,27 @@ static void verify_first_recovery_forward(void) {
     uint32_t start=wrap?UINT32_MAX-100U:120U;
     mission_snapshot.state_entry_tick=start;
     mission_snapshot.yaw_cdeg=MissionTask_WrapYaw(s6_recovery_base_yaw_cdeg+errors[e]);
-    s6_yaw_pid_initialized=true;s6_yaw_pid_update_tick=start-10U;
-    s6_yaw_pid_integral=123.0f;s6_yaw_pid_last_error=456.0f;
+    s6_yaw_pid.initialized=true;s6_yaw_pid.update_tick=start-10U;
+    s6_yaw_pid.integral=123.0f;s6_yaw_pid.last_error=456.0f;
     for(unsigned t=0;t<sizeof(offsets)/sizeof(offsets[0]);++t) {
       recovery_tick(start+offsets[t],false);
       assert(mission_snapshot.state==MISSION_STATE_S6_RECOVERY_START && s6_recovery_first_forward_active);
       assert(mission_snapshot.left_target_rpm==170 && mission_snapshot.right_target_rpm==170);
       assert(mission_snapshot.vision_forward_rpm==170 && !mission_snapshot.vision_turn_rpm);
       assert(!mission_snapshot.safe_zone_fixed_heading_active && s6_recovery_count==1);
-      assert(s6_yaw_pid_initialized && s6_yaw_pid_update_tick==start-10U);
-      assert(s6_yaw_pid_integral==123.0f && s6_yaw_pid_last_error==456.0f);
+      assert(s6_yaw_pid.initialized && s6_yaw_pid.update_tick==start-10U);
+      assert(s6_yaw_pid.integral==123.0f && s6_yaw_pid.last_error==456.0f);
     }
     recovery_tick(start+300U,false);
     assert(mission_snapshot.state==MISSION_STATE_S6_RECOVERY_START && !s6_recovery_first_forward_active);
-    assert(mission_snapshot.state_entry_tick==start+300U && !s6_yaw_pid_initialized);
+    assert(mission_snapshot.state_entry_tick==start+300U && !s6_yaw_pid.initialized);
     assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm && s6_recovery_count==1);
   }
   // Turning starts AFTER300ms and receives its full independent2s deadline.
   recovery_setup(0,true);mission_snapshot.yaw_cdeg=9000;
   recovery_tick(419,false);assert(mission_snapshot.left_target_rpm==170);
   recovery_tick(420,false);recovery_tick(440,false);
-  assert(mission_snapshot.state==MISSION_STATE_S6_RECOVERY_START && s6_yaw_pid_initialized);
+  assert(mission_snapshot.state==MISSION_STATE_S6_RECOVERY_START && s6_yaw_pid.initialized);
   assert(mission_snapshot.left_target_rpm==-mission_snapshot.right_target_rpm);
   recovery_tick(2120,false);recovery_tick(2419,false);
   assert(mission_snapshot.state==MISSION_STATE_S6_RECOVERY_START);
@@ -136,7 +136,7 @@ static void verify_prepare_reverse_without_yaw(void) {
     assert(mission_snapshot.state_entry_tick==start && claw_open_calls==1 && !tx_count);
     assert(mission_snapshot.left_target_rpm==-100 && mission_snapshot.right_target_rpm==-100);
     assert(mission_snapshot.vision_forward_rpm==-100 && !mission_snapshot.vision_turn_rpm);
-    assert(!mission_snapshot.safe_zone_fixed_heading_active && !s6_yaw_pid_initialized);
+    assert(!mission_snapshot.safe_zone_fixed_heading_active && !s6_yaw_pid.initialized);
     assert(!mission_snapshot.vision_target_valid);
     tick(start+500U);
     assert(mission_snapshot.state==MISSION_STATE_S3_TRACK_GREEN);
@@ -183,16 +183,16 @@ static void verify_recovery_forward_without_yaw(void) {
     mission_snapshot.state_entry_tick=start;
     mission_snapshot.yaw_cdeg=MissionTask_WrapYaw(s6_recovery_base_yaw_cdeg+errors[e]);
     mission_snapshot.safe_zone_fixed_heading_active=true;
-    s6_yaw_pid_initialized=true;s6_yaw_pid_update_tick=start-10U;
-    s6_yaw_pid_integral=123.0f;s6_yaw_pid_last_error=456.0f;
+    s6_yaw_pid.initialized=true;s6_yaw_pid.update_tick=start-10U;
+    s6_yaw_pid.integral=123.0f;s6_yaw_pid.last_error=456.0f;
     for(unsigned t=0;t<sizeof(offsets)/sizeof(offsets[0]);++t) {
       recovery_tick(start+offsets[t],true);
       assert(mission_snapshot.state==MISSION_STATE_S6_RECOVERY_START && s6_recovery_count==2);
       assert(mission_snapshot.left_target_rpm==120 && mission_snapshot.right_target_rpm==120);
       assert(mission_snapshot.vision_forward_rpm==120 && !mission_snapshot.vision_turn_rpm);
       assert(!mission_snapshot.safe_zone_fixed_heading_active);
-      assert(s6_yaw_pid_initialized && s6_yaw_pid_update_tick==start-10U);
-      assert(s6_yaw_pid_integral==123.0f && s6_yaw_pid_last_error==456.0f);
+      assert(s6_yaw_pid.initialized && s6_yaw_pid.update_tick==start-10U);
+      assert(s6_yaw_pid.integral==123.0f && s6_yaw_pid.last_error==456.0f);
     }
     recovery_tick(start+1500U,false);
     assert(mission_snapshot.state==MISSION_STATE_S6_TRACK_SAFE_ZONE && s6_recovery_count==2);

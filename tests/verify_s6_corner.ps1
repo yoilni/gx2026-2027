@@ -15,7 +15,7 @@ function Extract-Function([string]$name) {
   }
   $source.Substring($match.Index, $cursor - $match.Index)
 }
-$names = @('MissionTask_WrapYaw', 'MissionTask_YawError', 'MissionTask_Abs32', 'MissionTask_ClampFloat',
+$names = @('MissionTask_GetVisionMotionProfile', 'MissionTask_WrapYaw', 'MissionTask_YawError', 'MissionTask_Abs32', 'MissionTask_ClampFloat',
   'MissionTask_HeadingTurnExpired', 'MissionTask_SetS1Phase', 'MissionTask_StartS1ClawOpenWait',
   'MissionTask_StartS2CrossBump', 'MissionTask_RunS1', 'MissionTask_RunS2CrossBump', 'MissionTask_RunS4ForcedLeftTurn',
   'MissionTask_GetSafeZoneYawOffset', 'MissionTask_GetSelectedObjectId', 'MissionTask_GetCarriedObjectId',
@@ -57,6 +57,10 @@ $preamble = @'
 #undef assert
 #define assert(condition) do { if (!(condition)) { fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#condition); exit(1); } } while(0)
 #include "mission_task.h"
+#include "chassis_motion.h"
+#include "heading_control.h"
+#include "chassis_actions.h"
+#include "vision_motion.h"
 #include "robot_config.h"
 #include "maixcam_task.h"
 typedef void *osThreadId_t;
@@ -898,7 +902,7 @@ static void verify_exit180_speed_and_corner_cruise(void) {
       s6_approach_start_tick=start;MissionTask_EnterState(stages[p],start);MissionTask_ResetS6ControllerState();
       mission_snapshot.yaw_cdeg=MissionTask_WrapYaw(100L-yaw_errors[e]);
       MissionTask_RunS6CornerEvacuation(start+durations[p]-1U);
-      assert(mission_snapshot.state==stages[p] && !tx_calls && s6_yaw_pid_initialized);
+      assert(mission_snapshot.state==stages[p] && !tx_calls && s6_yaw_pid.initialized);
       if(e<3) assert(mission_snapshot.left_target_rpm+mission_snapshot.right_target_rpm==240);
       else assert(mission_snapshot.left_target_rpm+mission_snapshot.right_target_rpm==0); //Existing>10deg heading gate.
       assert(abs(mission_snapshot.left_target_rpm)<=200 && abs(mission_snapshot.right_target_rpm)<=200);
@@ -955,18 +959,18 @@ static void verify_side_forward_without_yaw(void) {
       s6_reposition_side_yaw_cdeg=MissionTask_WrapYaw(35000+(side?27000:9000));
       MissionTask_EnterState(MISSION_STATE_S6_REPOSITION_FORWARD,start);
       mission_snapshot.yaw_cdeg=MissionTask_WrapYaw(s6_reposition_side_yaw_cdeg-errors[e]);
-      s6_yaw_pid_update_tick=start-10U;s6_yaw_pid_integral=123.0f;
+      s6_yaw_pid.update_tick=start-10U;s6_yaw_pid.integral=123.0f;
       fake_now=start+20U;coords();MissionTask_UpdateVisionInput(fake_now);
       MissionTask_RunS6SideReposition(fake_now);
       assert(mission_snapshot.state==MISSION_STATE_S6_REPOSITION_FORWARD);
       assert(mission_snapshot.left_target_rpm==120 && mission_snapshot.right_target_rpm==120);
       assert(mission_snapshot.vision_forward_rpm==120 && !mission_snapshot.vision_turn_rpm);
       assert(!mission_snapshot.safe_zone_fixed_heading_active);
-      assert(s6_yaw_pid_update_tick==start-10U && s6_yaw_pid_integral==123.0f);
+      assert(s6_yaw_pid.update_tick==start-10U && s6_yaw_pid.integral==123.0f);
       fake_now=start+durations[d]-1U;MissionTask_RunS6SideReposition(fake_now);
       assert(mission_snapshot.state==MISSION_STATE_S6_REPOSITION_FORWARD && s6_reposition_forward_ms==durations[d]);
       assert(mission_snapshot.left_target_rpm==120 && mission_snapshot.right_target_rpm==120);
-      assert(s6_yaw_pid_update_tick==start-10U && s6_yaw_pid_integral==123.0f);
+      assert(s6_yaw_pid.update_tick==start-10U && s6_yaw_pid.integral==123.0f);
       fake_now=start+durations[d];MissionTask_RunS6SideReposition(fake_now);
       assert(mission_snapshot.state==MISSION_STATE_S6_REPOSITION_TURN_SAFE);
       assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
@@ -1297,7 +1301,7 @@ $cases = $cases.Replace('int main(void) {',
 $testSource = Join-Path $outputDir 'verify_s6_corner.c'
 [IO.File]::WriteAllText($testSource,$preamble+$parserInclude+$globals+"`n"+$ruleTypes+"`n"+$prototypes+"`n"+$stubs+"`n"+($functions -join "`n")+"`n"+$cases,[Text.UTF8Encoding]::new($false))
 $testExe = Join-Path $outputDir 'verify_s6_corner.exe'
-& $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" "-I$projectRoot/User/Hardware/Serial/inc" $testSource -o $testExe
+& $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" "-I$projectRoot/User/Hardware/Serial/inc" "-I$projectRoot/User/Motion/Chassis/inc" $testSource (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') "-I$projectRoot/User/Motion/Vision/inc" (Join-Path $projectRoot 'User/Motion/Chassis/src/chassis_actions.c') (Join-Path $projectRoot 'User/Motion/Vision/src/vision_motion.c') -o $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host build failed' }
 & $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host assertions failed' }

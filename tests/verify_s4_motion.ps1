@@ -27,6 +27,7 @@ $preamble = @'
 #include <stdio.h>
 #include <stdarg.h>
 #include "mission_task.h"
+#include "chassis_actions.h"
 #include "robot_config.h"
 static MissionSnapshot mission_snapshot;
 static uint32_t s4_next_debug_tick;
@@ -164,6 +165,9 @@ int main(void) {
 $code = $preamble + "`n" + ($functions -join "`n") + "`n" + $baseline + "`n" + $cases
 $executable = Join-Path $outputDir 's4_motion_cases.exe'
 $code | & $Compiler '-std=c11' '-Wall' '-Wextra' '-Werror' '-x' 'c' '-' `
+    (Join-Path $projectRoot 'User/Motion/Chassis/src/chassis_actions.c') `
+    (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') `
+    '-I' (Join-Path $projectRoot 'User/Motion/Chassis/inc') `
     '-I' (Join-Path $projectRoot 'Task') '-o' $executable '-lm'
 if ($LASTEXITCODE -ne 0) { throw 'S4 motion host build failed' }
 & $executable

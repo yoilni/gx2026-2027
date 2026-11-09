@@ -34,6 +34,10 @@ $preamble = @'
 #include <string.h>
 #include <stdarg.h>
 #include "mission_task.h"
+#include "chassis_motion.h"
+#include "heading_control.h"
+#include "chassis_actions.h"
+#include "vision_motion.h"
 #include "robot_config.h"
 #include "maixcam_task.h"
 #define assert(c) do { if (!(c)) { fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#c); exit(1); } } while (0)
@@ -265,7 +269,7 @@ int main(void) {
 $testSource = Join-Path $outputDir 'verify_s7_e3_forward.c'
 [IO.File]::WriteAllText($testSource,$preamble+"`n"+$globals+"`n"+$prototypes+"`n"+$stubs+"`n"+($functions -join "`n")+"`n"+$cases,[Text.UTF8Encoding]::new($false))
 $testExe = Join-Path $outputDir 'verify_s7_e3_forward.exe'
-& $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" $testSource -o $testExe
+& $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" "-I$projectRoot/User/Motion/Chassis/inc" $testSource "-I$projectRoot/User/Motion/Vision/inc" -o $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host build failed' }
 & $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host assertions failed' }

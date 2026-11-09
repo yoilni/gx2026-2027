@@ -44,8 +44,8 @@ static uint32_t ae_to_ack(MissionState phase,uint8_t cmd,bool supplement,int32_t
   s51_second_e3_pending=s3_search_sweep_completed=s3_search_ccw_midpoint_done=true;
   s4_final_event34_pending=s4_final_mode_already_active=s4_e4_protocol_active=true;
   supplement_recovery_event=0xE3;
-  s3_pid_initialized=s3_y_pid_initialized=s6_yaw_pid_initialized=true;
-  s3_pid_integral=s3_y_pid_integral=s6_yaw_pid_integral=123.0f;
+  vision_motion.x.initialized=vision_motion.y.initialized=s6_yaw_pid.initialized=true;
+  vision_motion.x.integral=vision_motion.y.integral=s6_yaw_pid.integral=123.0f;
   fake_now=120;rx(0xAE);ae_tick(120);
   assert(mission_snapshot.state==MISSION_STATE_VISION_AVOID_START_TURN && maixcam_start_avoidance_active);
   assert(ae_resume_state==(supplement?MISSION_STATE_SUPPLEMENT_TRACK:MISSION_STATE_S3_TRACK_GREEN) && !tx_count);
@@ -54,8 +54,8 @@ static uint32_t ae_to_ack(MissionState phase,uint8_t cmd,bool supplement,int32_t
   assert(!vision_search_forward_active && !vision_search_e3_mode && !vision_search_green_e3_mode);
   assert(!s51_second_e3_pending && !s3_search_sweep_completed && !s3_search_ccw_midpoint_done);
   assert(!s4_final_event34_pending && !s4_final_mode_already_active && !s4_e4_protocol_active);
-  assert(!supplement_recovery_event && !s3_pid_initialized && !s3_y_pid_initialized && !s6_yaw_pid_initialized);
-  assert(s3_pid_integral==0 && s3_y_pid_integral==0 && s6_yaw_pid_integral==0);
+  assert(!supplement_recovery_event && !vision_motion.x.initialized && !vision_motion.y.initialized && !s6_yaw_pid.initialized);
+  assert(vision_motion.x.integral==0 && vision_motion.y.integral==0 && s6_yaw_pid.integral==0);
   const int32_t progress[]={6000,12000,16500,18000};
   for(unsigned i=0;i<4;++i) {
     fake_now=220+i*100;rx(0xAE);coords(cmd==0x11?4:5,0,0);

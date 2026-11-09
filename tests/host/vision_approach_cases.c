@@ -52,7 +52,7 @@ static void verify_vision_approach(void) {
     for (unsigned n=0; n<10; ++n) {
       fake_now+=20; mission_snapshot.target_age_ms+=20;
       assert(MissionTask_CalculateVisionForward(fake_now,448)==0);
-      assert(vision_forward_pending_frames==1);
+      assert(vision_motion.reverse.pending_frames==1);
     }
     assert(approach_frame(448)==-30);
     assert(approach_frame(13)==-20);
@@ -62,7 +62,7 @@ static void verify_vision_approach(void) {
     //accepted direction; forward -> zero -> backward still needs two frames.
     assert(approach_frame(13)==0);
     assert(approach_frame(0)==0);
-    assert(vision_forward_direction==1 && !vision_forward_pending_frames);
+    assert(vision_motion.reverse.direction==1 && !vision_motion.reverse.pending_frames);
     assert(approach_frame(13)==0);
     assert(approach_frame(13)==-20);
     //A fresh frame from a different class cannot complete confirmation.
@@ -78,7 +78,7 @@ static void verify_vision_approach(void) {
     assert(approach_frame(-50)==0);
     mission_snapshot.vision_target_valid=false;
     assert(MissionTask_CalculateVisionForward(fake_now,-50)==0);
-    assert(!vision_forward_pending_frames);
+    assert(!vision_motion.reverse.pending_frames);
     mission_snapshot.vision_target_valid=true;
     assert(approach_frame(-50)==0);
     assert(approach_frame(-50)==near50);

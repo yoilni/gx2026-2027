@@ -6,6 +6,7 @@ New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 $source = Get-Content (Join-Path $projectRoot 'Task/actuator_task.c') -Raw
 $servoSource = Get-Content (Join-Path $projectRoot 'Task/servo_test_task.c') -Raw
 $pwmRoot = Join-Path $projectRoot 'User/Hardware/Servo'
+$servoMotionRoot = Join-Path $projectRoot 'User/Motion/Servo'
 function Extract-Function([string]$name, [string]$body = $source) {
   $match = [regex]::Match($body, '(?m)^(?:static )?[^\r\n]+\b' + $name + '\([^;]*?\)\r?\n\{')
   if (-not $match.Success) { throw "Missing function $name" }
@@ -26,6 +27,7 @@ $prefix = @'
 #include <string.h>
 #include "robot_config.h"
 #include "servo_pwm.h"
+#include "servo_motion.h"
 #include "tim.h"
 TIM_TypeDef test_tim2;
 TIM_HandleTypeDef htim2;
@@ -226,8 +228,7 @@ int main(void) {
   puts("PASS:PA5 wide/final24 140,near115;PA2 down155/up80,PA3 closed36;PA2 suspension survives paired poses until explicit resume;independent PWM and startup faults checked");
 }
 '@
-$code = $prefix + "`n" + (Extract-Function 'Actuator_Mg90AngleToPulse') + "`n" +
-  (Extract-Function 'Actuator_FrameAngleToPulse') + "`n" +
+$code = $prefix + "`n" +
   (Extract-Function 'Actuator_DeferClawCommand') + "`n" +
   (Extract-Function 'Actuator_SetFrameAngles') + "`n" +
   (Extract-Function 'Actuator_Init') + "`n" + (Extract-Function 'Actuator_SetClawAngle') + "`n" +
@@ -245,6 +246,7 @@ $code = $prefix + "`n" + (Extract-Function 'Actuator_Mg90AngleToPulse') + "`n" +
   (Extract-Function 'StartServoTestTask' $servoSource) + "`n" + $cases
 $executable = Join-Path $outputDir 'servo_outputs_cases.exe'
 $code | & $Compiler -std=c11 -Wall -Wextra -Werror -x c - (Join-Path $pwmRoot 'src/servo_pwm.c') `
+  (Join-Path $servoMotionRoot 'src/servo_motion.c') '-I' (Join-Path $servoMotionRoot 'inc') `
   '-I' (Join-Path $pwmRoot 'inc') '-I' (Join-Path $PSScriptRoot 'host/servo_pwm_hal') `
   '-I' (Join-Path $PSScriptRoot 'host') '-I' (Join-Path $projectRoot 'Task') -o $executable
 if ($LASTEXITCODE -ne 0) { throw 'Servo output test build failed' }

@@ -61,6 +61,10 @@ $preamble = @'
 #include <string.h>
 #include <stdarg.h>
 #include "mission_task.h"
+#include "chassis_motion.h"
+#include "heading_control.h"
+#include "chassis_actions.h"
+#include "vision_motion.h"
 #include "robot_config.h"
 #include "maixcam_task.h"
 #define assert(c) do { if (!(c)) { fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#c); exit(1); } } while (0)
@@ -452,7 +456,7 @@ $greenE3Cases = Get-Content (Join-Path $PSScriptRoot 'host/s3_green_e3_cases.c')
 $testSource = Join-Path $outputDir 'verify_s51_e3_stages.c'
 [IO.File]::WriteAllText($testSource,$preamble+"`n"+$eventDefines+"`n"+$globals+"`n"+$prototypes+$parserInclude+$stubs+"`n"+($functions -join "`n")+"`n"+$post22Wait+"`n"+$cases+"`n"+$post22Cases+"`n"+$exit180Cases+"`n"+$debugCases+"`n"+$redFenceCases+"`n"+$materialTripCases+"`n"+$greenE3Cases,[Text.UTF8Encoding]::new($false))
 $testExe = Join-Path $outputDir 'verify_s51_e3_stages.exe'
-& $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" "-I$projectRoot/User/Hardware/Serial/inc" $testSource -o $testExe
+& $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" "-I$projectRoot/User/Hardware/Serial/inc" "-I$projectRoot/User/Motion/Chassis/inc" $testSource (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') "-I$projectRoot/User/Motion/Vision/inc" (Join-Path $projectRoot 'User/Motion/Chassis/src/chassis_actions.c') (Join-Path $projectRoot 'User/Motion/Vision/src/vision_motion.c') -o $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host build failed' }
 & $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host assertions failed' }
