@@ -24,6 +24,16 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Flows/Capture/src/capture_flow.c
     Flows/Departure/src/departure_flow.c
     Flows/Recovery/src/recovery_flow.c
+    Mission/State/src/mission_state.c
+    Mission/Safety/src/mission_safety.c
+    Mission/Vision/src/mission_vision.c
+    Mission/Capture/src/mission_arrange.c
+    Mission/Capture/src/mission_capture.c
+    Mission/Capture/src/mission_load.c
+    Mission/Capture/src/mission_supplement.c
+    Mission/SafeZone/src/mission_safe_zone.c
+    Mission/SafeZone/src/mission_delivery.c
+    Mission/Strategy/src/mission_strategy.c
     Runtime/Diagnostics/src/imu_diagnostics_adapter.c
 )
 
@@ -48,4 +58,10 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Flows/Capture/inc
     ${CMAKE_CURRENT_SOURCE_DIR}/Flows/Departure/inc
     ${CMAKE_CURRENT_SOURCE_DIR}/Flows/Recovery/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Mission/State/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Mission/Safety/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Mission/Vision/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Mission/Capture/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Mission/SafeZone/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Mission/Strategy/inc
 )

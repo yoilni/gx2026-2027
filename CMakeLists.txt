@@ -41,8 +41,6 @@ add_executable(${CMAKE_PROJECT_NAME}
         Debug/debug_uart_task.h
         Task/actuator_task.c
         Task/actuator_task.h
-        Task/mission_task.c
-        Task/mission_task.h
         Task/start_button_task.c
         Task/start_button_task.h
         Task/reset_reason.c

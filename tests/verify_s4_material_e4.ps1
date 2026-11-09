@@ -3,7 +3,9 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $outputDir = Join-Path $projectRoot 'cmake-build-stm32/material_e4_host'
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
-$source = Get-Content (Join-Path $projectRoot 'Task/mission_task.c') -Raw
+. (Join-Path $PSScriptRoot 'host/mission_sources.ps1')
+$missionFixture = Get-MissionHostFixture $projectRoot
+$source = $missionFixture.Source
 function Extract-Function([string]$name) {
   $match = [regex]::Match($source, '(?m)^static [^\r\n]+\b' + $name + '\([^;]*?\)\r?\n\{')
   if (-not $match.Success) { throw "Missing function $name" }
@@ -44,8 +46,7 @@ $functions += (Extract-Function 'MissionTask_CalculateS6YawPid').Replace(
 $functions += (Extract-Function 'MissionTask_RunS6TurnToHeading').Replace(
   'MissionTask_RunS6TurnToHeading(', 'Real_GreenTurnToHeading(')
 $prototypes = ($functions | ForEach-Object { $_.Substring(0, $_.IndexOf('{')).TrimEnd() + ';' }) -join "`n"
-$start = $source.IndexOf('static osThreadId_t mission_task_handle;')
-$globals = $source.Substring($start, $source.IndexOf('static const osThreadAttr_t mission_task_attributes') - $start)
+$globals = $missionFixture.Globals
 $arrange = Extract-Function 'MissionTask_RunS4Arrange'
 $waitBegin = $arrange.IndexOf('    case MISSION_STATE_S4_WAIT_ARRANGE_READY:')
 $waitEnd = $arrange.IndexOf('    case MISSION_STATE_S4_TRACK_RIGHT_BLOCK:', $waitBegin)
@@ -330,7 +331,7 @@ $redSweepPrototype = "`nstatic void verify_red_e4_sweep(void);`n"
 $fineCases = Get-Content (Join-Path $PSScriptRoot 'host/s4_fine_arrange_cases.c') -Raw
 $code = $preamble+"`n"+$globals+"`n"+$prototypes+$redSweepPrototype+$parserInclude+$stubs+"`n"+($functions -join "`n")+"`n"+$arrangeWait+"`n"+$cases+"`n"+$eventCases+"`n"+$frameCases+"`n"+$redSweepCases+"`n"+$fineCases
 . (Join-Path $PSScriptRoot 'host/flow_build.ps1') $projectRoot
-$code | & $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" "-I$projectRoot/User/Hardware/Serial/inc" "-I$projectRoot/User/Motion/Chassis/inc" -x c - (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') "-I$projectRoot/User/Motion/Vision/inc" (Join-Path $projectRoot 'User/Motion/Chassis/src/chassis_actions.c') (Join-Path $projectRoot 'User/Motion/Vision/src/vision_motion.c') @flowBuildArgs -o $testExe
+$code | & $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/User/Mission/State/inc" "-I$projectRoot/maixcam" "-I$projectRoot/User/Hardware/Serial/inc" "-I$projectRoot/User/Motion/Chassis/inc" -x c - (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') "-I$projectRoot/User/Motion/Vision/inc" (Join-Path $projectRoot 'User/Motion/Chassis/src/chassis_actions.c') (Join-Path $projectRoot 'User/Motion/Vision/src/vision_motion.c') @flowBuildArgs -o $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host build failed' }
 & $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host assertions failed' }

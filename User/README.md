@@ -33,9 +33,9 @@ and starts the existing tasks.
 | `Motion/Vision` | `VisionMotion_CalculateTurn()`、`CalculateForward()`、`GuardForward()`、`AgeScale()` | 视觉 X/Y PID、分段速度、反向新帧确认、旧帧降速和安全区限速。调用方选择控制配置、提供有效帧，不在这里解析协议或决定目标。 |
 | `Motion/WheelSpeed` | 原 `SpeedLoop_*` 和 PID | 代码原样迁移。原 2 ms 电机任务仍是唯一 CAN 电流下发者。 |
 
-`26` 的顺序、推进计时、到位参数与超时策略仍在原状态机；下一阶段再迁入
-`Flows/Delivery`。ROI、目标选择、坐标有效期策略和握手仍在原层，也没有
-新增 FreeRTOS 任务。独立动作回归入口：`tests/verify_motion_layer.ps1`。
+`26` 的动作顺序和推进计时已在第三阶段迁入 `Flows/Delivery`。ROI、目标选择、
+坐标有效期策略和握手仍由 Mission 决定。没有新增 FreeRTOS 任务。
+独立动作回归入口：`tests/verify_motion_layer.ps1`。
 
 ## 第三阶段：动作流程
 
@@ -51,10 +51,31 @@ and starts the existing tasks.
 | `Flows/Recovery` | 红色扫视、`6E` 首次/后续恢复、`E2/EE` 退车与扫视、定向旋转的角度累计。 |
 
 每个流程以原比赛任务的 tick 执行；`Flows/Common` 只执行单个转向或驱动段，
-没有新任务或脚本解释器。`Task/mission_task.c` 暂保留旧状态编号和适配入口，
-把传感器、时钟和已有的轮速/舵机动作交给流程。急停和故障优先，流程退出后
-不再调用其动作；投放挡板 PWM 的释放仍由任务层在取消时触发。
+没有新任务或脚本解释器。Mission 保留旧状态编号和适配入口，把传感器、
+时钟和已有的轮速/舵机动作交给流程。急停和故障优先，流程退出后不再调用
+其动作；投放挡板 PWM 的释放仍由任务层在取消时触发。
 
 串口事件优先级、坐标帧清理、回包、送达计数、`05` 清点、补抓预算和 `07`
 仍由比赛状态机负责。独立流程回归入口：`tests/verify_flows_layer.ps1`；现有
 投放、避杆、整理、抓取和恢复回归同时覆盖这些适配入口。
+
+## 第四阶段：任务编排
+
+| 模块 | 手动改动入口 |
+| --- | --- |
+| `Mission/State` | `mission_state.c`：PE13～15 的队伍/出发区锁定、发车与越减速带衔接、中央状态切换和每轮处理顺序；`mission_task.h` 是其他任务使用的公开接口。 |
+| `Mission/Safety` | `mission_safety.c`：启动检查、运行中的电机/IMU 健康检查，以及启动、复位、停止、急停事件的优先级。 |
+| `Mission/Vision` | `mission_vision.c`：坐标类别、有效期、参考点、`03` 追踪、`E3` 搜索恢复和 `AE` 避让。MaixCAM 字节解析仍在原串口模块。 |
+| `Mission/Capture` | `mission_arrange.c`：`04/14`、推散和 `E4/22`；`mission_capture.c`：`24/34/54` 抓取的进入、结束和超时；`mission_load.c`：`05/45` 清点、调整和撤离复检；`mission_supplement.c`：补抓计数、预算、握手和恢复。 |
+| `Mission/SafeZone` | `mission_safe_zone.c`：`06/16` 找区、横移/撤离判断和 `36/46/6E`；`mission_delivery.c`：`26` 投放的进入、取消和退车后切换 `07`。 |
+| `Mission/Strategy` | `mission_strategy.c`：`07` 选目标、伤员优先切换、送达次数限制和下一轮搜索。 |
+
+只改舵机角度、速度、时长或 PID 参数，先查 `Task/robot_config.h`。改一段
+动作怎样执行、动作的先后顺序，先查对应的 `Flows` 模块；改收到什么消息才
+开始、做完进入哪个状态，查上述 Mission 文件。动作顺序改动涉及握手或故障
+时，仍应同时核对 Mission 的入口和结束条件。
+
+Mission 仍由一个 FreeRTOS 任务顺序执行。各源文件独用的计数器、计时器保留
+为文件私有；跨模块的快照和任务状态集中在私有 `MissionContext`，不会向
+其他任务公开。其他任务继续通过 `MissionTask_GetSnapshot()` 读快照，通过
+原有请求 API 提交事件。此阶段不迁移 RTOS 创建接线。

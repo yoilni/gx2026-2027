@@ -3,7 +3,9 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $outputDir = Join-Path $projectRoot 'cmake-build-stm32/s7_e3_host'
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
-$source = Get-Content (Join-Path $projectRoot 'Task/mission_task.c') -Raw
+. (Join-Path $PSScriptRoot 'host/mission_sources.ps1')
+$missionFixture = Get-MissionHostFixture $projectRoot
+$source = $missionFixture.Source
 function Extract-Function([string]$name) {
   $match = [regex]::Match($source, '(?m)^static [^\r\n]+\b' + $name + '\([^;]*?\)\r?\n\{')
   if (-not $match.Success) { throw "Missing function $name" }
@@ -24,8 +26,7 @@ $names = @('MissionTask_WrapYaw', 'MissionTask_YawError', 'MissionTask_Abs32',
   'MissionTask_ResumeRedTracking', 'MissionTask_CompleteS7RedRecovery')
 $functions = @($names | ForEach-Object { Extract-Function $_ })
 $prototypes = ($functions | ForEach-Object { $_.Substring(0, $_.IndexOf('{')).TrimEnd() + ';' }) -join "`n"
-$start = $source.IndexOf('static osThreadId_t mission_task_handle;')
-$globals = $source.Substring($start, $source.IndexOf('static const osThreadAttr_t mission_task_attributes') - $start)
+$globals = $missionFixture.Globals
 $preamble = @'
 #include <stdio.h>
 #include <stdlib.h>
@@ -271,7 +272,7 @@ $testSource = Join-Path $outputDir 'verify_s7_e3_forward.c'
 [IO.File]::WriteAllText($testSource,$preamble+"`n"+$globals+"`n"+$prototypes+"`n"+$stubs+"`n"+($functions -join "`n")+"`n"+$cases,[Text.UTF8Encoding]::new($false))
 $testExe = Join-Path $outputDir 'verify_s7_e3_forward.exe'
 . (Join-Path $PSScriptRoot 'host/flow_build.ps1') $projectRoot
-& $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" "-I$projectRoot/User/Motion/Chassis/inc" $testSource "-I$projectRoot/User/Motion/Vision/inc" (Join-Path $projectRoot 'User/Motion/Chassis/src/chassis_actions.c') (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') @flowBuildArgs -o $testExe
+& $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/User/Mission/State/inc" "-I$projectRoot/maixcam" "-I$projectRoot/User/Motion/Chassis/inc" $testSource "-I$projectRoot/User/Motion/Vision/inc" (Join-Path $projectRoot 'User/Motion/Chassis/src/chassis_actions.c') (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') @flowBuildArgs -o $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host build failed' }
 & $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host assertions failed' }

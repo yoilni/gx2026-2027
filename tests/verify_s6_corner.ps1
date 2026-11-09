@@ -3,7 +3,9 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $outputDir = Join-Path $projectRoot 'cmake-build-stm32/corner_host'
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
-$source = Get-Content (Join-Path $projectRoot 'Task/mission_task.c') -Raw
+. (Join-Path $PSScriptRoot 'host/mission_sources.ps1')
+$missionFixture = Get-MissionHostFixture $projectRoot
+$source = $missionFixture.Source
 function Extract-Function([string]$name) {
   $match = [regex]::Match($source, '(?m)^static [^\r\n]+\b' + $name + '\([^;]*?\)\r?\n\{')
   if (-not $match.Success) { throw "Missing function $name" }
@@ -44,8 +46,7 @@ $names += @('MissionTask_CanPauseForLoadCheck', 'MissionTask_HandleLoadCheckRequ
 $names += @('MissionTask_S6CanStartBarShift', 'MissionTask_HandleS6BarShiftRequest', 'MissionTask_RunS6BarShift')
 $functions = @($names | ForEach-Object { Extract-Function $_ })
 $prototypes = ($functions | ForEach-Object { $_.Substring(0, $_.IndexOf('{')).TrimEnd() + ';' }) -join "`n"
-$start = $source.IndexOf('static osThreadId_t mission_task_handle;')
-$globals = $source.Substring($start, $source.IndexOf('static const osThreadAttr_t mission_task_attributes') - $start)
+$globals = $missionFixture.Globals
 $ruleTypes = [regex]::Match($source, '(?m)^typedef struct\r?\n\{\r?\n  uint8_t start_zone;[\s\S]*?^static const MissionSideRule s6_corner_rules\[\].*;').Value
 if (-not $ruleTypes) { throw 'Missing real side/corner tables' }
 $preamble = @'
@@ -1303,7 +1304,7 @@ $testSource = Join-Path $outputDir 'verify_s6_corner.c'
 [IO.File]::WriteAllText($testSource,$preamble+$parserInclude+$globals+"`n"+$ruleTypes+"`n"+$prototypes+"`n"+$stubs+"`n"+($functions -join "`n")+"`n"+$cases,[Text.UTF8Encoding]::new($false))
 $testExe = Join-Path $outputDir 'verify_s6_corner.exe'
 . (Join-Path $PSScriptRoot 'host/flow_build.ps1') $projectRoot
-& $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" "-I$projectRoot/User/Hardware/Serial/inc" "-I$projectRoot/User/Motion/Chassis/inc" $testSource (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') "-I$projectRoot/User/Motion/Vision/inc" (Join-Path $projectRoot 'User/Motion/Chassis/src/chassis_actions.c') (Join-Path $projectRoot 'User/Motion/Vision/src/vision_motion.c') @flowBuildArgs -o $testExe
+& $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/User/Mission/State/inc" "-I$projectRoot/maixcam" "-I$projectRoot/User/Hardware/Serial/inc" "-I$projectRoot/User/Motion/Chassis/inc" $testSource (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') "-I$projectRoot/User/Motion/Vision/inc" (Join-Path $projectRoot 'User/Motion/Chassis/src/chassis_actions.c') (Join-Path $projectRoot 'User/Motion/Vision/src/vision_motion.c') @flowBuildArgs -o $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host build failed' }
 & $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host assertions failed' }

@@ -92,6 +92,7 @@ $executable = Join-Path $outputDir 'oled_yaw_cases.exe'
 $code | & $Compiler '-std=c11' '-Wall' '-Wextra' '-Werror' '-x' 'c' '-' `
     '-I' (Join-Path $projectRoot 'tests/host') `
     '-I' (Join-Path $projectRoot 'User/Hardware/Imu/inc') `
+    '-I' (Join-Path $projectRoot 'User/Mission/State/inc') `
     '-I' (Join-Path $projectRoot 'Task') '-o' $executable
 if ($LASTEXITCODE -ne 0) { throw 'OLED yaw host build failed' }
 & $executable

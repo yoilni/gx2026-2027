@@ -3,7 +3,9 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $outputDir = Join-Path $projectRoot 'cmake-build-stm32/s4_motion_host'
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
-$source = Get-Content (Join-Path $projectRoot 'Task/mission_task.c') -Raw
+. (Join-Path $PSScriptRoot 'host/mission_sources.ps1')
+$missionFixture = Get-MissionHostFixture $projectRoot
+$source = $missionFixture.Source
 function Extract-Function([string]$name) {
   $match = [regex]::Match($source, '(?m)^static [^\r\n]+\b' + $name + '\([^;]*?\)\r?\n\{')
   if (-not $match.Success) { throw "Missing function $name" }
@@ -168,6 +170,7 @@ $code | & $Compiler '-std=c11' '-Wall' '-Wextra' '-Werror' '-x' 'c' '-' `
     (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') `
     '-I' (Join-Path $projectRoot 'User/Motion/Chassis/inc') `
     '-I' (Join-Path $PSScriptRoot 'host') `
+    '-I' (Join-Path $projectRoot 'User/Mission/State/inc') `
     '-I' (Join-Path $projectRoot 'Task') @flowBuildArgs '-o' $executable '-lm'
 if ($LASTEXITCODE -ne 0) { throw 'S4 motion host build failed' }
 & $executable

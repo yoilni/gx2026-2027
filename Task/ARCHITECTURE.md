@@ -1,9 +1,11 @@
-# Task application layer
+# Task application layer (historical notes)
 
-`Task` owns the robot application policy. Hardware drivers remain in their
-existing directories and must not contain mission-state transitions.
+The current application layout and manual editing entry points are documented
+in [User/README.md](../User/README.md). The original mission source moved to
+`User/Mission`; the implementation notes below describe an earlier version,
+not the current motion parameters or protocol.
 
-## Current entry point
+## Original entry point
 
 - `mission_task.c/.h`: root mission state, start/stop/reset requests, coherent
   sensor snapshot, latched safety faults, and the first implemented S1 action:
