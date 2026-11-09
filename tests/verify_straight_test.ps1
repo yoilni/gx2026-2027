@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $outputDir = Join-Path $projectRoot 'cmake-build-stm32/straight_test_host'
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
-$motorSource = Get-Content (Join-Path $projectRoot 'Task/motor_test_task.c') -Raw
+$motorSource = Get-Content (Join-Path $projectRoot 'User/Runtime/Bench/src/motor_test_task.c') -Raw
 function Extract-Function([string]$source, [string]$name) {
   $match = [regex]::Match($source, '(?m)^(?:static )?[^\r\n]+\b' + $name + '\([^;]*?\)\s*\{')
   if (-not $match.Success) { throw "Missing function $name" }
@@ -218,7 +218,7 @@ $functions = ($names | ForEach-Object { Extract-Function $motorSource $_ }) -joi
 $code = $prefix + "`n" + $motorDefines + "`n" + $feedbackDefine + "`n" + $motorGlobals +
   "`n" + $functions + "`n" + $cases
 $includeDirs = @('tests/host/rtos_hal', 'User/Runtime/Rtos/inc', 'User/Mission/State/inc',
-  'User/Hardware/Imu/inc', 'User/Hardware/Display/inc', 'Core/Inc', 'M2006', 'OLED', 'Task', 'Debug')
+  'User/Hardware/Imu/inc', 'User/Hardware/Display/inc', 'Core/Inc', 'User/Runtime/Control/inc', 'User/Runtime/Diagnostics/inc', 'User/Config/inc', 'User/Runtime/Bench/inc')
 $includeArgs = @($includeDirs | ForEach-Object { "-I$(Join-Path $projectRoot $_)" })
 $sources = @('Core/Src/freertos.c', 'User/Runtime/Rtos/src/app_rtos.c',
   'User/Runtime/Rtos/src/app_rtos_task_config.c') | ForEach-Object { Join-Path $projectRoot $_ }

@@ -171,7 +171,7 @@ $code | & $Compiler '-std=c11' '-Wall' '-Wextra' '-Werror' '-x' 'c' '-' `
     '-I' (Join-Path $projectRoot 'User/Motion/Chassis/inc') `
     '-I' (Join-Path $PSScriptRoot 'host') `
     '-I' (Join-Path $projectRoot 'User/Mission/State/inc') `
-    '-I' (Join-Path $projectRoot 'Task') @flowBuildArgs '-o' $executable '-lm'
+    '-I' (Join-Path $projectRoot 'User/Config/inc') @flowBuildArgs '-o' $executable '-lm'
 if ($LASTEXITCODE -ne 0) { throw 'S4 motion host build failed' }
 & $executable
 if ($LASTEXITCODE -ne 0) { throw 'S4 motion distance/curve checks failed' }

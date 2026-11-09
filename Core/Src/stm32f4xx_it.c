@@ -22,8 +22,6 @@
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "can.h"
-#include "usart.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -191,18 +189,4 @@ void USART2_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
-void UART4_IRQHandler(void)
-{
-  HAL_UART_IRQHandler(&huart4);
-}
-
-void USART3_IRQHandler(void)
-{
-  HAL_UART_IRQHandler(&huart3);
-}
-
-void CAN1_RX0_IRQHandler(void)
-{
-  HAL_CAN_IRQHandler(&hcan1);
-}
 /* USER CODE END 1 */

@@ -3,15 +3,20 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $outputDir = Join-Path $projectRoot 'cmake-build-stm32/reset_notify_host'
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
-$source = Get-Content (Join-Path $projectRoot 'Core/Src/main.c') -Raw
+$mainSource = Get-Content (Join-Path $projectRoot 'Core/Src/main.c') -Raw
+$source = Get-Content (Join-Path $projectRoot 'User/Runtime/Boot/src/app_boot.c') -Raw
 $notify = [regex]::Match($source, '(?s)  BootInit_SetStage\("MAIXCAM_RESET_TX"\);\r?\n  \{.*?\r?\n  \}')
 if (-not $notify.Success) { throw 'Missing actual startup reset notification' }
-if ([regex]::Matches($source, 'MaixCam_SendCommand\(MAIXCAM_COMMAND_MCU_RESET\)').Count -ne 1) {
+if ([regex]::Matches(($source + $mainSource), 'MaixCam_SendCommand\(MAIXCAM_COMMAND_MCU_RESET\)').Count -ne 1) {
   throw 'Reset notification must have one startup call site'
 }
 $initIndex = $source.IndexOf('if (MaixCam_Init(&huart3) != HAL_OK)')
-$kernelIndex = $source.IndexOf('osKernelInitialize()')
-if ($initIndex -lt 0 -or $notify.Index -le $initIndex -or $notify.Index -ge $kernelIndex) {
+$bootHook = $mainSource.IndexOf('AppBoot_AfterPeripherals();')
+$lastPeripheral = $mainSource.IndexOf('MX_I2C2_Init();')
+$kernelIndex = $mainSource.IndexOf('osKernelInitialize()')
+if ($initIndex -lt 0 -or $notify.Index -le $initIndex -or
+    $lastPeripheral -lt 0 -or $bootHook -le $lastPeripheral -or $bootHook -ge $kernelIndex -or
+    [regex]::Matches($mainSource, 'AppBoot_AfterPeripherals\(\);').Count -ne 1) {
   throw 'Reset notification must follow vision RX init and precede RTOS startup'
 }
 $prefix = @'
@@ -86,7 +91,7 @@ $executable = Join-Path $outputDir 'reset_notify_cases.exe'
 & $Compiler '-std=c11' '-Wall' '-Wextra' '-Werror' `
     '-I' (Join-Path $projectRoot 'tests/host/hwt101_hal') `
     '-I' (Join-Path $projectRoot 'User/Hardware/Serial/inc') `
-    '-I' (Join-Path $projectRoot 'maixcam') $testSource '-o' $executable
+    '-I' (Join-Path $projectRoot 'User/Runtime/Comms/inc') '-I' (Join-Path $projectRoot 'User/Runtime/Comms/src') $testSource '-o' $executable
 if ($LASTEXITCODE -ne 0) { throw 'Reset notification host build failed' }
 & $executable
 if ($LASTEXITCODE -ne 0) { throw 'Reset notification checks failed' }

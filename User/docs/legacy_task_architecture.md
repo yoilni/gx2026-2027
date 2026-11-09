@@ -1,7 +1,7 @@
 # Task application layer (historical notes)
 
 The current application layout and manual editing entry points are documented
-in [User/README.md](../User/README.md). The original mission source moved to
+in [User/README.md](../README.md). The original mission source moved to
 `User/Mission`; the implementation notes below describe an earlier version,
 not the current motion parameters or protocol.
 

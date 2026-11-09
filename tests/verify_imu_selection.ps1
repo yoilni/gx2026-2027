@@ -9,8 +9,8 @@ $executable = Join-Path $outputDir 'imu_selection_cases.exe'
     '-I' (Join-Path $projectRoot 'User/Hardware/Imu/inc') `
     '-I' (Join-Path $projectRoot 'User/Hardware/Imu/src') `
     '-I' (Join-Path $projectRoot 'User/Hardware/Serial/inc') `
-    '-I' (Join-Path $projectRoot 'Task') `
-    '-I' (Join-Path $projectRoot 'Debug') `
+    '-I' (Join-Path $projectRoot 'User/Config/inc') `
+    '-I' (Join-Path $projectRoot 'User/Runtime/Diagnostics/inc') `
     (Join-Path $projectRoot 'tests/host/imu_selection_cases.c') `
     (Join-Path $projectRoot 'User/Runtime/Diagnostics/src/imu_diagnostics_adapter.c') '-o' $executable
 if ($LASTEXITCODE -ne 0) { throw 'IMU selection host build failed' }

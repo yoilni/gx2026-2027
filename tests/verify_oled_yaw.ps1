@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $outputDir = Join-Path $projectRoot 'cmake-build-stm32/oled_host'
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
-$source = Get-Content (Join-Path $projectRoot 'OLED/oled_task.c') -Raw
+$source = Get-Content (Join-Path $projectRoot 'User/Runtime/Diagnostics/src/oled_task.c') -Raw
 
 function Extract-Function([string]$name) {
   $match = [regex]::Match($source, '(?m)^static [^\r\n]+\b' + $name + '\([^;]*?\)\r?\n\{')
@@ -93,7 +93,7 @@ $code | & $Compiler '-std=c11' '-Wall' '-Wextra' '-Werror' '-x' 'c' '-' `
     '-I' (Join-Path $projectRoot 'tests/host') `
     '-I' (Join-Path $projectRoot 'User/Hardware/Imu/inc') `
     '-I' (Join-Path $projectRoot 'User/Mission/State/inc') `
-    '-I' (Join-Path $projectRoot 'Task') '-o' $executable
+    '-I' (Join-Path $projectRoot 'User/Config/inc') '-o' $executable
 if ($LASTEXITCODE -ne 0) { throw 'OLED yaw host build failed' }
 & $executable
 if ($LASTEXITCODE -ne 0) { throw 'OLED yaw checks failed' }

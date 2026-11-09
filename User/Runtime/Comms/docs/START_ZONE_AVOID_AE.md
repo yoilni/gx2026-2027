@@ -37,5 +37,5 @@ AE不会重置E3/E4/EE恢复次数、目标类别、第一轮绿色限制或补�
 - 动作期间的重复AE和跨回包边界补齐的旧AE半帧直接合并；独立05/06报告和11仍保留。
 
 日志：`[AE] RX ... >03`、`p=... v=...`、`TURN OK`、`TXAE >03`、`REACK`、`TX FAIL RETRY`、`IGNORE`。
-参数集中在`Task/robot_config.h`的`ROBOT_AE_*`，状态枚举追加，不更改原有状态编号。
+参数集中在`User/Config/inc/robot_config.h`的`ROBOT_AE_*`，状态枚举追加，不更改原有状态编号。
 回归入口：`tests/verify_supplement_capture.ps1`，覆盖真实解析器、实际状态函数、跨0°/计时回绕、重复与丢包、回包时新坐标/事件、类别及预算/安全保护。

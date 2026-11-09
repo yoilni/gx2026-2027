@@ -18,7 +18,7 @@
 
 ## 当前电机设置
 
-启动目标在 `Core/Src/main.c` 中设置：
+启动目标在 `User/Runtime/Boot/src/app_boot.c` 中设置：
 
 ```c
 SpeedLoop_SetMotorTarget(4U, 0.0f, 1000);
@@ -49,17 +49,19 @@ cmake --build cmake-build-stm32 --parallel 4
 
 生成的固件为 `cmake-build-stm32/gx_version1.elf`。
 
-## FreeRTOS 任务文件结构
+## 固件目录
 
-- `Core/Src/freertos.c` 仅保存任务属性、句柄和创建逻辑。
-- `OLED/oled_task.c` 定义 OLED 初始化、显示逻辑和 OLED 任务入口。
-- `M2006/M2006_task.c` 定义 2 ms 电机控制任务入口。
-- `Core/Src/led_task.c` 定义状态灯任务入口。
-- 各 `_task.h` 使用外部声明，将任务入口提供给 `freertos.c`。
+自写固件集中在 [User/](User/README.md)。统一参数入口是
+[`robot_config.h`](User/Config/inc/robot_config.h)。应用任务的创建顺序与
+线程属性在 `User/Runtime/Rtos`；CubeMX 的 `Core/Src/freertos.c` 保留
+`defaultTask` 和调用应用入口的接线。电机周期任务在
+`User/Runtime/Control`，OLED、UART2 日志和心跳在
+`User/Runtime/Diagnostics`。
 
 ## 重大变更记录
 
-后续涉及硬件配置、通信协议、控制策略或功能行为的修改，请在本节新增一条记录。
+以下是历史记录，其中的文件路径、角度和协议属于当时版本。现行入口以上述
+目录为准。后续涉及硬件配置、通信协议、控制策略或功能行为的修改，请在本节新增一条记录。
 
 ### 2026-09-24 — MaixCam 坐标帧升级为 11 字节有符号误差
 

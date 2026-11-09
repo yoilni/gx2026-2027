@@ -35,60 +35,10 @@ project(${CMAKE_PROJECT_NAME})
 message("Build type: " ${CMAKE_BUILD_TYPE})
 
 # Create an executable object type
-add_executable(${CMAKE_PROJECT_NAME}
-        maixcam/maixcam_task.c
-        Debug/debug_uart_task.c
-        Debug/debug_uart_task.h
-        Task/actuator_task.c
-        Task/actuator_task.h
-        Task/start_button_task.c
-        Task/start_button_task.h
-        Task/reset_reason.c
-        Task/reset_reason.h
-        Task/boot_init.c
-        Task/boot_init.h
-        Task/servo_test_task.c
-        Task/servo_test_task.h
-        Task/motor_test_task.c
-        Task/motor_test_task.h
-        Task/robot_config.h
-        Task/uart_callback_router.c)
+add_executable(${CMAKE_PROJECT_NAME})
 
-# Add STM32CubeMX generated sources
+# CubeMX owns platform sources; User owns all application sources.
 add_subdirectory(cmake/stm32cubemx)
 add_subdirectory(User)
 
-# Link directories setup
-target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined library search paths
-)
-
-# Add sources to executable
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-        M2006/M2006_task.c
-        OLED/oled_task.c
-        Core/Src/led_task.c
-    # Add user sources here
-)
-
-# Add include paths
-target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/M2006
-    ${CMAKE_CURRENT_SOURCE_DIR}/OLED
-    ${CMAKE_CURRENT_SOURCE_DIR}/maixcam
-    ${CMAKE_CURRENT_SOURCE_DIR}/Task
-    ${CMAKE_CURRENT_SOURCE_DIR}/Debug
-    # Add user defined include paths
-)
-
-# Add project symbols (macros)
-target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined symbols
-)
-
-# Add linked libraries
-target_link_libraries(${CMAKE_PROJECT_NAME}
-    stm32cubemx
-
-    # Add user defined libraries
-)
+target_link_libraries(${CMAKE_PROJECT_NAME} stm32cubemx)

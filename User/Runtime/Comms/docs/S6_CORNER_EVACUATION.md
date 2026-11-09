@@ -101,7 +101,7 @@ UART2的 `[LOAD05]`和`[CHECK05]` 打印入口、确认/拒绝ID及下一步处�
 
 UART2日志：`[CORNER]`打印载荷ID、出发区/红蓝方、触发角度、两段目标角度和阶段；
 `[GOAL]`标识`CORNER_AWAY`、`CORNER_SIDE`，安全区方向为`SAFE_HOLD`。
-配置入口位于`Task/robot_config.h`的`ROBOT_S6_CORNER_*`和`ROBOT_S6_SIDE_RULE_ROWS`。
+配置入口位于`User/Config/inc/robot_config.h`的`ROBOT_S6_CORNER_*`和`ROBOT_S6_SIDE_RULE_ROWS`。
 
 ## 普通侧移前进不使用角度环
 

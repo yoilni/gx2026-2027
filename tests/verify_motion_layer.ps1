@@ -8,7 +8,7 @@ $executable = Join-Path $outputDir 'motion_layer_cases.exe'
 & $Compiler '-std=c11' '-Wall' '-Wextra' '-Werror' `
     '-I' (Join-Path $PSScriptRoot 'host/motion_hal') `
     '-I' (Join-Path $PSScriptRoot 'host') `
-    '-I' (Join-Path $projectRoot 'Task') `
+    '-I' (Join-Path $projectRoot 'User/Config/inc') `
     '-I' (Join-Path $projectRoot 'User/Hardware/Motor/inc') `
     '-I' (Join-Path $motionRoot 'WheelSpeed/inc') `
     '-I' (Join-Path $motionRoot 'Chassis/inc') `

@@ -447,7 +447,7 @@ int main(void) {
   puts("PASS: ordinary51 E3 count, second mapped-away turn +100rpm/1200ms +gyro CCW360; all zone/team headings, duplicate/fresh/stale gates, interruptions, reset/saturation, health/timeouts and legacy profiles");
 }
 '@
-$parserPath = (Join-Path $projectRoot 'maixcam/maixcam_task.c').Replace('\','/')
+$parserPath = (Join-Path $projectRoot 'User/Runtime/Comms/src/maixcam_task.c').Replace('\','/')
 $parserInclude = "`n#define MaixCam_SendCommand Parser_SendCommand`n#include `"$parserPath`"`n#undef MaixCam_SendCommand`n"
 $post22Cases = Get-Content (Join-Path $PSScriptRoot 'host/post22_search_cases.c') -Raw
 $exit180Cases = Get-Content (Join-Path $PSScriptRoot 'host/exit180_event_cases.c') -Raw
@@ -459,7 +459,7 @@ $testSource = Join-Path $outputDir 'verify_s51_e3_stages.c'
 [IO.File]::WriteAllText($testSource,$preamble+"`n"+$eventDefines+"`n"+$globals+"`n"+$prototypes+$parserInclude+$stubs+"`n"+($functions -join "`n")+"`n"+$post22Wait+"`n"+$cases+"`n"+$post22Cases+"`n"+$exit180Cases+"`n"+$debugCases+"`n"+$redFenceCases+"`n"+$materialTripCases+"`n"+$greenE3Cases,[Text.UTF8Encoding]::new($false))
 $testExe = Join-Path $outputDir 'verify_s51_e3_stages.exe'
 . (Join-Path $PSScriptRoot 'host/flow_build.ps1') $projectRoot
-& $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/User/Mission/State/inc" "-I$projectRoot/maixcam" "-I$projectRoot/User/Hardware/Serial/inc" "-I$projectRoot/User/Motion/Chassis/inc" $testSource (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') "-I$projectRoot/User/Motion/Vision/inc" (Join-Path $projectRoot 'User/Motion/Chassis/src/chassis_actions.c') (Join-Path $projectRoot 'User/Motion/Vision/src/vision_motion.c') @flowBuildArgs -o $testExe
+& $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/User/Config/inc" "-I$projectRoot/User/Mission/State/inc" "-I$projectRoot/User/Runtime/Comms/inc" "-I$projectRoot/User/Hardware/Serial/inc" "-I$projectRoot/User/Motion/Chassis/inc" $testSource (Join-Path $projectRoot 'User/Motion/Chassis/src/heading_control.c') "-I$projectRoot/User/Motion/Vision/inc" (Join-Path $projectRoot 'User/Motion/Chassis/src/chassis_actions.c') (Join-Path $projectRoot 'User/Motion/Vision/src/vision_motion.c') @flowBuildArgs -o $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host build failed' }
 & $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host assertions failed' }

@@ -3,8 +3,8 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $outputDir = Join-Path $projectRoot 'cmake-build-stm32/servo_outputs_host'
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
-$source = Get-Content (Join-Path $projectRoot 'Task/actuator_task.c') -Raw
-$servoSource = Get-Content (Join-Path $projectRoot 'Task/servo_test_task.c') -Raw
+$source = Get-Content (Join-Path $projectRoot 'User/Motion/Servo/src/actuator_task.c') -Raw
+$servoSource = Get-Content (Join-Path $projectRoot 'User/Runtime/Bench/src/servo_test_task.c') -Raw
 $pwmRoot = Join-Path $projectRoot 'User/Hardware/Servo'
 $servoMotionRoot = Join-Path $projectRoot 'User/Motion/Servo'
 function Extract-Function([string]$name, [string]$body = $source) {
@@ -248,7 +248,7 @@ $executable = Join-Path $outputDir 'servo_outputs_cases.exe'
 $code | & $Compiler -std=c11 -Wall -Wextra -Werror -x c - (Join-Path $pwmRoot 'src/servo_pwm.c') `
   (Join-Path $servoMotionRoot 'src/servo_motion.c') '-I' (Join-Path $servoMotionRoot 'inc') `
   '-I' (Join-Path $pwmRoot 'inc') '-I' (Join-Path $PSScriptRoot 'host/servo_pwm_hal') `
-  '-I' (Join-Path $PSScriptRoot 'host') '-I' (Join-Path $projectRoot 'Task') -o $executable
+  '-I' (Join-Path $PSScriptRoot 'host') '-I' (Join-Path $projectRoot 'User/Config/inc') -o $executable
 if ($LASTEXITCODE -ne 0) { throw 'Servo output test build failed' }
 & $executable
 if ($LASTEXITCODE -ne 0) { throw 'Servo output checks failed' }

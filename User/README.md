@@ -1,8 +1,21 @@
 # Application source migration
 
-Each migrated module keeps its headers in `inc/` and its implementation in `src/`.
-The root build includes `User/CMakeLists.txt`; CubeMX still configures peripherals
-and starts the existing tasks.
+自写固件统一由 `User/CMakeLists.txt` 登记。模块头文件放在 `inc/`，实现放在
+`src/`；没有对外接口的模块不建空头文件。CubeMX 外设初始化、内核启动、
+向量表、链接脚本和第三方库仍在原位，生成入口只保留必要的调用接线。
+
+| 目录 | 改什么时看这里 |
+| --- | --- |
+| `Config/inc/robot_config.h` | 角度、速度、时长、PID、队伍映射和调试开关。 |
+| `Hardware` | 电机、陀螺仪、串口、PWM 和板上 IO 的访问。 |
+| `Motion` | 轮速、角度环、视觉控制和挡板/夹爪姿态接口。 |
+| `Flows` | 单个流程内部动作的顺序与完成条件。 |
+| `Mission` | 比赛状态切换、视觉握手、恢复和目标策略。 |
+| `Runtime` | 上电、任务创建、周期服务、中断、MaixCAM 串口和调试输出。 |
+| `Legacy/Bluetooth` | 旧蓝牙和模式控制，留档，不参与当前构建。 |
+
+仓库根目录的 `tests/` 是主机回归，不是车载固件。旧版目录和参数的历史
+说明存档在 [legacy_task_architecture.md](docs/legacy_task_architecture.md)。
 
 ## 第一阶段：硬件层
 
@@ -70,7 +83,7 @@ and starts the existing tasks.
 | `Mission/SafeZone` | `mission_safe_zone.c`：`06/16` 找区、横移/撤离判断和 `36/46/6E`；`mission_delivery.c`：`26` 投放的进入、取消和退车后切换 `07`。 |
 | `Mission/Strategy` | `mission_strategy.c`：`07` 选目标、伤员优先切换、送达次数限制和下一轮搜索。 |
 
-只改舵机角度、速度、时长或 PID 参数，先查 `Task/robot_config.h`。改一段
+只改舵机角度、速度、时长或 PID 参数，先查 `Config/inc/robot_config.h`。改一段
 动作怎样执行、动作的先后顺序，先查对应的 `Flows` 模块；改收到什么消息才
 开始、做完进入哪个状态，查上述 Mission 文件。动作顺序改动涉及握手或故障
 时，仍应同时核对 Mission 的入口和结束条件。
@@ -89,6 +102,13 @@ Mission 仍由一个 FreeRTOS 任务顺序执行。各源文件独用的计数�
 - `Core/Src/main.c` 和 `Core/Src/freertos.c`：保留 CubeMX 的内核初始化、启动
   和 `defaultTask` 创建，应用入口放在 `USER CODE` 区。心跳的 `defaultTask`
   优先级和栈大小仍在 `gx_version1.ioc` 配置（Normal、128 字）。
-- 调试开关仍在 `Task/robot_config.h`，任务周期仍在各任务实现处，未修改。
+- 调试开关在 `Config/inc/robot_config.h`，任务周期仍在各任务实现处，未修改。
   `tests/verify_straight_test.ps1` 验证实际启动代码在比赛、直行、舵机、
   挡板和直行加舵机模式下的创建顺序、线程配置与创建失败保护。
+
+其余接线按职责归档：`Runtime/Boot` 管上电和故障处理，
+`Runtime/Interrupts` 管手写的 UART4／USART3／CAN1_RX0 向量和 UART 回调，
+`Runtime/Comms` 管视觉串口协议，`Runtime/Control` 管电机周期任务和 PE12，
+`Runtime/Diagnostics` 管 OLED、心跳和 UART2 日志，`Runtime/Bench` 管单独调试。
+如果将来在 CubeMX 开启上述三个中断向量的代码生成，要先处理手写向量的归属，
+避免同名 `IRQHandler` 重复定义。

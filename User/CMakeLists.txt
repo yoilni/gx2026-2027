@@ -12,6 +12,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Motion/Chassis/src/chassis_actions.c
     Motion/Chassis/src/heading_control.c
     Motion/Servo/src/servo_motion.c
+    Motion/Servo/src/actuator_task.c
     Motion/Vision/src/vision_motion.c
     Motion/WheelSpeed/src/M2006_PID.c
     Motion/WheelSpeed/src/M2006_Speed.c
@@ -34,7 +35,20 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Mission/SafeZone/src/mission_safe_zone.c
     Mission/SafeZone/src/mission_delivery.c
     Mission/Strategy/src/mission_strategy.c
+    Runtime/Bench/src/motor_test_task.c
+    Runtime/Bench/src/servo_test_task.c
+    Runtime/Boot/src/app_boot.c
+    Runtime/Boot/src/boot_init.c
+    Runtime/Boot/src/reset_reason.c
+    Runtime/Comms/src/maixcam_task.c
+    Runtime/Control/src/M2006_task.c
+    Runtime/Control/src/start_button_task.c
+    Runtime/Diagnostics/src/debug_uart_task.c
     Runtime/Diagnostics/src/imu_diagnostics_adapter.c
+    Runtime/Diagnostics/src/led_task.c
+    Runtime/Diagnostics/src/oled_task.c
+    Runtime/Interrupts/src/board_irq_handlers.c
+    Runtime/Interrupts/src/uart_callback_router.c
     Runtime/Rtos/src/app_rtos.c
     Runtime/Rtos/src/app_rtos_task_config.c
 )
@@ -66,5 +80,11 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/Mission/Capture/inc
     ${CMAKE_CURRENT_SOURCE_DIR}/Mission/SafeZone/inc
     ${CMAKE_CURRENT_SOURCE_DIR}/Mission/Strategy/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Config/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Runtime/Bench/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Runtime/Boot/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Runtime/Comms/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Runtime/Control/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/Runtime/Diagnostics/inc
     ${CMAKE_CURRENT_SOURCE_DIR}/Runtime/Rtos/inc
 )

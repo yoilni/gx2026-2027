@@ -1,7 +1,7 @@
 #ifndef HOST_RTOS_ROBOT_CONFIG_H
 #define HOST_RTOS_ROBOT_CONFIG_H
 
-#include "../../../Task/robot_config.h"
+#include "../../../User/Config/inc/robot_config.h"
 
 /* Profile zero exercises the real checked-in configuration. */
 #if RTOS_TEST_PROFILE != 0

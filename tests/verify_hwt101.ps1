@@ -9,8 +9,8 @@ $executable = Join-Path $outputDir 'hwt101_cases.exe'
     '-I' (Join-Path $projectRoot 'User/Hardware/Imu/inc') `
     '-I' (Join-Path $projectRoot 'User/Hardware/Imu/src') `
     '-I' (Join-Path $projectRoot 'User/Hardware/Serial/inc') `
-    '-I' (Join-Path $projectRoot 'Task') `
-    '-I' (Join-Path $projectRoot 'Debug') `
+    '-I' (Join-Path $projectRoot 'User/Config/inc') `
+    '-I' (Join-Path $projectRoot 'User/Runtime/Diagnostics/inc') `
     (Join-Path $projectRoot 'tests/host/hwt101_cases.c') `
     (Join-Path $projectRoot 'User/Runtime/Diagnostics/src/imu_diagnostics_adapter.c') '-o' $executable
 if ($LASTEXITCODE -ne 0) { throw 'HWT101 host build failed' }
