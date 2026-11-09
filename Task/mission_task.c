@@ -9,6 +9,7 @@
 #include "maixcam_task.h"
 #include "robot_config.h"
 #include "stm32f4xx_hal.h"
+#include "switch_input.h"
 
 #define MISSION_TASK_PERIOD_TICKS       20U
 #define MISSION_TASK_STACK_BYTES        (512U * 4U)
@@ -641,7 +642,7 @@ static void MissionTask_SetS1Phase(MissionS1Phase phase, uint32_t now)
 
 static void MissionTask_UpdatePe13(void)
 {
-  GPIO_PinState sample = HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_13);
+  GPIO_PinState sample = SwitchInput_ReadTeam();
 
   if (!pe13_initialized)
   {
@@ -673,7 +674,7 @@ static void MissionTask_UpdatePe13(void)
 
 static void MissionTask_UpdatePe14(void)
 {
-  GPIO_PinState sample = HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_14);
+  GPIO_PinState sample = SwitchInput_ReadZoneMsb();
 
   if (!pe14_initialized)
   {
@@ -705,7 +706,7 @@ static void MissionTask_UpdatePe14(void)
 
 static void MissionTask_UpdatePe15(void)
 {
-  GPIO_PinState sample = HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_15);
+  GPIO_PinState sample = SwitchInput_ReadZoneLsb();
 
   if (!pe15_initialized)
   {

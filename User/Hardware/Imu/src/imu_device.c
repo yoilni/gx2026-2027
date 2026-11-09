@@ -1,8 +1,9 @@
 #include "imu_task.h"
 #include "hwt101.h"
 #include "jy901s.h"
-#include "debug_uart_task.h"
+#include "imu_diagnostics.h"
 #include "robot_config.h"
+#include "uart_port.h"
 
 #include <string.h>
 
@@ -114,7 +115,7 @@ HAL_StatusTypeDef IMU_Init(UART_HandleTypeDef *huart)
   imu_next_rx_retry_tick = now;
   imu_next_debug_tick = now;
   imu_source = IMU_PROBING;
-  HAL_StatusTypeDef status = HAL_UART_Receive_IT(huart, &imu_probe_rx_byte, 1U);
+  HAL_StatusTypeDef status = UartPort_ReceiveIT(huart, &imu_probe_rx_byte, 1U);
   imu_probe_rx_armed = status == HAL_OK;
   if (status != HAL_OK) imu_source = IMU_INIT_FAILED;
   return status;
@@ -129,7 +130,7 @@ void IMU_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     case IMU_JY901S: JY901S_UART_RxCpltCallback(huart); break;
     case IMU_PROBING:
       IMU_ProcessProbeByte(imu_probe_rx_byte);
-      imu_probe_rx_armed = HAL_UART_Receive_IT(huart, &imu_probe_rx_byte, 1U) == HAL_OK;
+      imu_probe_rx_armed = UartPort_ReceiveIT(huart, &imu_probe_rx_byte, 1U) == HAL_OK;
       break;
     default: break;
   }
@@ -147,8 +148,8 @@ void IMU_UART_ErrorCallback(UART_HandleTypeDef *huart)
       imu_has_version = false;
       imu_hwt_identified = false;
       imu_query_pending = false;
-      (void)HAL_UART_AbortReceive(huart);
-      imu_probe_rx_armed = HAL_UART_Receive_IT(huart, &imu_probe_rx_byte, 1U) == HAL_OK;
+      (void)UartPort_AbortReceive(huart);
+      imu_probe_rx_armed = UartPort_ReceiveIT(huart, &imu_probe_rx_byte, 1U) == HAL_OK;
       break;
     default: break;
   }
@@ -171,10 +172,10 @@ static void IMU_SelectDriver(bool select_hwt)
   {
     imu_source = IMU_INIT_FAILED;
     if (primask == 0U) __enable_irq();
-    (void)DebugUart_Log("[IMU] CONFLICT STOP NO ZERO\r\n");
+    (void)imu_diagnostics.log("[IMU] CONFLICT STOP NO ZERO\r\n");
     return;
   }
-  status = HAL_UART_AbortReceive(imu_uart);
+  status = UartPort_AbortReceive(imu_uart);
   imu_query_pending = false;
   imu_probe_index = 0U;
   if (status == HAL_OK)
@@ -183,11 +184,11 @@ static void IMU_SelectDriver(bool select_hwt)
       ? (select_hwt ? IMU_HWT101 : IMU_JY901S) : IMU_INIT_FAILED;
   if (primask == 0U) __enable_irq();
   imu_next_debug_tick = HAL_GetTick();
-  (void)DebugUart_Logf("[IMU] src=%s hal=%u seen=%u ver=%08lX pid=%lu\r\n",
+  (void)imu_diagnostics.logf("[IMU] src=%s hal=%u seen=%u ver=%08lX pid=%lu\r\n",
       select_hwt ? "HWT101" : "JY901S", (unsigned)status, version_seen ? 1U : 0U,
       (unsigned long)version, (unsigned long)((version >> 14U) & 0x1FFFFUL));
   if (!select_hwt && status == HAL_OK)
-    (void)DebugUart_Log("[IMU] JY COMPAT; HWT UNKNOWN\r\n");
+    (void)imu_diagnostics.log("[IMU] JY COMPAT; HWT UNKNOWN\r\n");
 }
 
 void IMU_Service(uint32_t now)
@@ -201,7 +202,7 @@ void IMU_Service(uint32_t now)
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
     if (!imu_probe_rx_armed)
-      imu_probe_rx_armed = HAL_UART_Receive_IT(imu_uart, &imu_probe_rx_byte, 1U) == HAL_OK;
+      imu_probe_rx_armed = UartPort_ReceiveIT(imu_uart, &imu_probe_rx_byte, 1U) == HAL_OK;
     if (primask == 0U) __enable_irq();
   }
   if (imu_hwt_identified)
@@ -220,10 +221,10 @@ void IMU_Service(uint32_t now)
   uint8_t query[5] = {0xFFU, 0xAAU, 0x27U, 0x2EU, 0x00U};
   ++imu_probe_attempts;
   imu_query_pending = true; /* Arm before TX: a response may arrive in TX. */
-  HAL_StatusTypeDef status = HAL_UART_Transmit(imu_uart, query, sizeof(query), IMU_TX_TIMEOUT_MS);
+  HAL_StatusTypeDef status = UartPort_Transmit(imu_uart, query, sizeof(query), IMU_TX_TIMEOUT_MS);
   if (status != HAL_OK) imu_query_pending = false;
   imu_next_probe_tick = HAL_GetTick() + ROBOT_IMU_PROBE_INTERVAL_MS;
-  (void)DebugUart_Logf("[IMU] PROBE=%u/%u TX27/2E hal=%u\r\n",
+  (void)imu_diagnostics.logf("[IMU] PROBE=%u/%u TX27/2E hal=%u\r\n",
       (unsigned)imu_probe_attempts, (unsigned)ROBOT_IMU_PROBE_ATTEMPTS, (unsigned)status);
 }
 
@@ -263,12 +264,12 @@ void IMU_DebugYaw(uint32_t now)
       (imu_source == IMU_PROBING ? "PROBING" : "INIT_FAILED");
   if (!IMU_GetYaw(&sample))
   {
-    (void)DebugUart_Logf("[IMU] src=%s NO DATA pid=%lu seen=%u\r\n",
+    (void)imu_diagnostics.logf("[IMU] src=%s NO DATA pid=%lu seen=%u\r\n",
         source, (unsigned long)((imu_packed_version >> 14U) & 0x1FFFFUL), imu_has_version ? 1U : 0U);
     return;
   }
   int32_t wrapped = sample.yaw_cdeg < 0 ? sample.yaw_cdeg + 36000L : sample.yaw_cdeg;
-  (void)DebugUart_Logf("[IMU] src=%s yaw=%ld.%02ld q=%lu age=%lu\r\n",
+  (void)imu_diagnostics.logf("[IMU] src=%s yaw=%ld.%02ld q=%lu age=%lu\r\n",
       source, (long)(wrapped / 100L), (long)(wrapped % 100L),
       (unsigned long)sample.sequence, (unsigned long)(now - sample.update_tick));
 }

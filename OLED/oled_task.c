@@ -8,6 +8,7 @@
 #include "reset_reason.h"
 #include "robot_config.h"
 #include "servo_test_task.h"
+#include "switch_input.h"
 
 #include <stdio.h>
 
@@ -58,7 +59,7 @@ static void OLED_TaskShowYaw(void)
 
 static void OLED_TaskShowStartButton(void)
 {
-  GPIO_PinState pin_state = HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_12);
+  GPIO_PinState pin_state = SwitchInput_ReadStart();
 
   (void)OLED_WriteString(0U, 0U,
       pin_state == GPIO_PIN_SET ? "PE12:H READY    " : "PE12:L PRESSED  ");
@@ -303,11 +304,11 @@ static uint8_t OLED_TaskReadStartZone(void)
 {
   uint8_t selector = 0U;
 
-  if (HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_14) == GPIO_PIN_SET)
+  if (SwitchInput_ReadZoneMsb() == GPIO_PIN_SET)
   {
     selector |= 2U;
   }
-  if (HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_15) == GPIO_PIN_SET)
+  if (SwitchInput_ReadZoneLsb() == GPIO_PIN_SET)
   {
     selector |= 1U;
   }
@@ -351,7 +352,7 @@ static void OLED_TaskShowConfig(void)
     return;
   }
 
-  red = (HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_13) == GPIO_PIN_SET
+  red = (SwitchInput_ReadTeam() == GPIO_PIN_SET
              ? ROBOT_PE13_HIGH_TEAM
              : ROBOT_PE13_LOW_TEAM) == ROBOT_TEAM_RED;
   zone = OLED_TaskReadStartZone();
@@ -407,7 +408,7 @@ static void OLED_TaskUpdate(void)
     (void)snprintf(pulse_text, sizeof(pulse_text), "PWM:%4uus HOLD ",
                    (unsigned)pulse_us);
     (void)OLED_WriteString(0U, 0U,
-        HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_12) == GPIO_PIN_SET
+        SwitchInput_ReadStart() == GPIO_PIN_SET
             ? "PE12:H UNUSED   " : "PE12:L UNUSED   ");
     (void)OLED_WriteString(0U, 2U, angle_text);
     (void)OLED_WriteString(0U, 4U, pulse_text);

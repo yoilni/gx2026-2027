@@ -1,6 +1,7 @@
 #include "hwt101.h"
-#include "debug_uart_task.h"
+#include "imu_diagnostics.h"
 #include "robot_config.h"
+#include "uart_port.h"
 
 #include <string.h>
 
@@ -107,7 +108,7 @@ HAL_StatusTypeDef HWT101_Init(UART_HandleTypeDef *huart)
   hwt101_rx_retry_tick = hwt101_phase_tick;
   hwt101_next_debug_tick = hwt101_phase_tick;
   hwt101_startup = HWT101_WAIT_POWER;
-  HAL_StatusTypeDef status = HAL_UART_Receive_IT(huart, &hwt101_rx_byte, 1U);
+  HAL_StatusTypeDef status = UartPort_ReceiveIT(huart, &hwt101_rx_byte, 1U);
   hwt101_rx_armed = status == HAL_OK;
   if (status != HAL_OK) hwt101_startup = HWT101_INIT_FAILED;
   return status;
@@ -117,7 +118,7 @@ void HWT101_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart == NULL || huart != hwt101_uart) return;
   HWT101_ProcessByte(hwt101_rx_byte);
-  hwt101_rx_armed = HAL_UART_Receive_IT(huart, &hwt101_rx_byte, 1U) == HAL_OK;
+  hwt101_rx_armed = UartPort_ReceiveIT(huart, &hwt101_rx_byte, 1U) == HAL_OK;
 }
 
 void HWT101_UART_ErrorCallback(UART_HandleTypeDef *huart)
@@ -125,17 +126,17 @@ void HWT101_UART_ErrorCallback(UART_HandleTypeDef *huart)
   if (huart == NULL || huart != hwt101_uart) return;
   ++hwt101_uart_errors;
   HWT101_InvalidateYaw();
-  (void)HAL_UART_AbortReceive(huart);
-  hwt101_rx_armed = HAL_UART_Receive_IT(huart, &hwt101_rx_byte, 1U) == HAL_OK;
+  (void)UartPort_AbortReceive(huart);
+  hwt101_rx_armed = UartPort_ReceiveIT(huart, &hwt101_rx_byte, 1U) == HAL_OK;
 }
 
 static bool HWT101_SendRegister(uint8_t address, uint16_t value)
 {
   uint8_t command[5] = {0xFFU, 0xAAU, address,
                         (uint8_t)value, (uint8_t)(value >> 8U)};
-  HAL_StatusTypeDef status = HAL_UART_Transmit(hwt101_uart, command,
+  HAL_StatusTypeDef status = UartPort_Transmit(hwt101_uart, command,
                                               sizeof(command), HWT101_TX_TIMEOUT_MS);
-  (void)DebugUart_Logf("[HWT] TX %02X/%02X/%02X hal=%u\r\n",
+  (void)imu_diagnostics.logf("[HWT] TX %02X/%02X/%02X hal=%u\r\n",
       (unsigned)address, (unsigned)command[3], (unsigned)command[4], (unsigned)status);
   if (status != HAL_OK)
   {
@@ -154,7 +155,7 @@ void HWT101_Service(uint32_t now)
     uint32_t primask = __get_PRIMASK();
     __disable_irq();
     if (!hwt101_rx_armed)
-      hwt101_rx_armed = HAL_UART_Receive_IT(hwt101_uart, &hwt101_rx_byte, 1U) == HAL_OK;
+      hwt101_rx_armed = UartPort_ReceiveIT(hwt101_uart, &hwt101_rx_byte, 1U) == HAL_OK;
     if (primask == 0U) __enable_irq();
   }
 
@@ -192,7 +193,7 @@ void HWT101_Service(uint32_t now)
         hwt101_frame_index = 0U;
         hwt101_startup = HWT101_READY;
         if (primask == 0U) __enable_irq();
-        (void)DebugUart_Log("[HWT] ZERO/SAVE TX OK; NO ACK\r\n");
+        (void)imu_diagnostics.log("[HWT] ZERO/SAVE TX OK; NO ACK\r\n");
       }
       break;
     default:
@@ -223,13 +224,13 @@ void HWT101_DebugYaw(uint32_t now)
   HWT101_Yaw yaw;
   if (!HWT101_GetYaw(&yaw))
   {
-    (void)DebugUart_Logf("[HWT] s=%u NO DATA rx=%u crc=%lu uart=%lu\r\n",
+    (void)imu_diagnostics.logf("[HWT] s=%u NO DATA rx=%u crc=%lu uart=%lu\r\n",
         (unsigned)hwt101_startup, hwt101_rx_armed ? 1U : 0U,
         (unsigned long)hwt101_checksum_errors, (unsigned long)hwt101_uart_errors);
     return;
   }
   int32_t wrapped = yaw.yaw_cdeg < 0 ? yaw.yaw_cdeg + 36000L : yaw.yaw_cdeg;
-  (void)DebugUart_Logf("[HWT] yaw=%ld.%02ld q=%lu age=%lu ver=%04X\r\n",
+  (void)imu_diagnostics.logf("[HWT] yaw=%ld.%02ld q=%lu age=%lu ver=%04X\r\n",
       (long)(wrapped / 100L), (long)(wrapped % 100L), (unsigned long)yaw.sequence,
       (unsigned long)(now - yaw.update_tick), (unsigned)yaw.version);
 }

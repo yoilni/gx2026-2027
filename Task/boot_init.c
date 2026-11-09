@@ -1,7 +1,9 @@
 #include "boot_init.h"
 
 #include "M2006.h"
+#include "board_led.h"
 #include "robot_config.h"
+#include "uart_port.h"
 #include "usart.h"
 
 #include <stdarg.h>
@@ -86,18 +88,7 @@ void BootInit_Logf(const char *format, ...)
      HAL_UART_Transmit's HAL tick timeout would not work in that situation. */
   start = DWT->CYCCNT;
   cycles = (SystemCoreClock / 1000U) * ROBOT_BOOT_UART_TIMEOUT_MS;
-  for (uint32_t index = 0U; text[index] != '\0'; ++index)
-  {
-    while ((USART2->SR & USART_SR_TXE) == 0U)
-    {
-      if ((uint32_t)(DWT->CYCCNT - start) >= cycles) return;
-    }
-    USART2->DR = (uint8_t)text[index];
-  }
-  while ((USART2->SR & USART_SR_TC) == 0U)
-  {
-    if ((uint32_t)(DWT->CYCCNT - start) >= cycles) return;
-  }
+  UartPort_WriteBootText(&huart2, text, start, cycles);
 }
 
 HAL_StatusTypeDef BootInit_CheckHalTick(void)
@@ -239,9 +230,9 @@ void BootInit_FaultLoop(void)
                   (unsigned int)boot_last_status);
     for (uint32_t pulse = 0U; pulse < 3U; ++pulse)
     {
-      HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+      BoardLed_Toggle();
       BootInit_DelayMs(100U);
-      HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
+      BoardLed_Toggle();
       BootInit_DelayMs(100U);
     }
     BootInit_DelayMs(1000U);

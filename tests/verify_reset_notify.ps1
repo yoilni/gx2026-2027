@@ -32,7 +32,7 @@ void __enable_irq(void) {}
 HAL_StatusTypeDef HAL_UART_Receive_IT(UART_HandleTypeDef *u,uint8_t *b,uint16_t n) {
   assert(u==&vision_uart && n==1); ++rx_count; rx_destination=b; return HAL_OK;
 }
-HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *u,uint8_t *b,uint16_t n,uint32_t t) {
+HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *u,const uint8_t *b,uint16_t n,uint32_t t) {
   assert(u==&vision_uart && n==5 && t==20);
   ++tx_count; memcpy(packet,b,5); return tx_status;
 }
@@ -85,6 +85,7 @@ $testSource = Join-Path $outputDir 'reset_notify_cases.c'
 $executable = Join-Path $outputDir 'reset_notify_cases.exe'
 & $Compiler '-std=c11' '-Wall' '-Wextra' '-Werror' `
     '-I' (Join-Path $projectRoot 'tests/host/hwt101_hal') `
+    '-I' (Join-Path $projectRoot 'User/Hardware/Serial/inc') `
     '-I' (Join-Path $projectRoot 'maixcam') $testSource '-o' $executable
 if ($LASTEXITCODE -ne 0) { throw 'Reset notification host build failed' }
 & $executable

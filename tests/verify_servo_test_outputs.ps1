@@ -5,6 +5,7 @@ $outputDir = Join-Path $projectRoot 'cmake-build-stm32/servo_outputs_host'
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 $source = Get-Content (Join-Path $projectRoot 'Task/actuator_task.c') -Raw
 $servoSource = Get-Content (Join-Path $projectRoot 'Task/servo_test_task.c') -Raw
+$pwmRoot = Join-Path $projectRoot 'User/Hardware/Servo'
 function Extract-Function([string]$name, [string]$body = $source) {
   $match = [regex]::Match($body, '(?m)^(?:static )?[^\r\n]+\b' + $name + '\([^;]*?\)\r?\n\{')
   if (-not $match.Success) { throw "Missing function $name" }
@@ -24,22 +25,11 @@ $prefix = @'
 #include <stdio.h>
 #include <string.h>
 #include "robot_config.h"
-typedef enum { HAL_OK, HAL_ERROR } HAL_StatusTypeDef;
-typedef struct { uint32_t CCER; } TIM_TypeDef;
-typedef struct { TIM_TypeDef *Instance; struct { uint32_t Prescaler, Period; } Init; } TIM_HandleTypeDef;
-static TIM_TypeDef test_tim2;
-#define TIM2 (&test_tim2)
-#define TIM_CCER_CC3E (1U << 8)
-#define TIM_CCER_CC4E (1U << 12)
-#define TIM_CHANNEL_1 0U
-#define TIM_CHANNEL_3 2U
-#define TIM_CHANNEL_4 3U
-#define ACTUATOR_TIM2_EXPECTED_PSC 83U
-#define ACTUATOR_TIM2_EXPECTED_ARR 19999U
-#define SERVO_TEST_TIMER_PSC 83U
-#define SERVO_TEST_TIMER_ARR 19999U
+#include "servo_pwm.h"
+#include "tim.h"
+TIM_TypeDef test_tim2;
+TIM_HandleTypeDef htim2;
 #define SERVO_TEST_TASK_PERIOD_TICKS 10U
-static TIM_HandleTypeDef htim2;
 static uint8_t baffle_pwm_suspended;
 static uint8_t claw_close_guard_active, claw_close_pending;
 static uint32_t claw_close_guard_tick;
@@ -49,24 +39,26 @@ static unsigned fail_channel;
 static jmp_buf bench_exit;
 static uint32_t bench_now;
 static volatile uint16_t servo_test_pulse_us=ROBOT_MG90_TEST_START_PULSE_US;
-static void set_compare(TIM_HandleTypeDef *timer, unsigned channel, uint16_t pulse) {
+void ServoPwmTest_SetCompare(TIM_HandleTypeDef *timer, unsigned channel, uint16_t pulse) {
   assert(timer==&htim2 && channel<4);
   compare[channel]=pulse; ++writes[channel];
 }
-#define __HAL_TIM_SET_COMPARE(timer, channel, pulse) set_compare(timer, channel, pulse)
-static HAL_StatusTypeDef HAL_TIM_PWM_Start(TIM_HandleTypeDef *timer, unsigned channel) {
+HAL_StatusTypeDef HAL_TIM_PWM_Start(TIM_HandleTypeDef *timer, uint32_t channel) {
   assert(timer==&htim2 && channel<4); ++started[channel];
+  assert(writes[channel]);
   if(channel==fail_channel) return HAL_ERROR;
   assert(!(timer->Instance->CCER & (1U << (4U * channel))));
   timer->Instance->CCER |= 1U << (4U * channel);
   return HAL_OK;
 }
-static HAL_StatusTypeDef HAL_TIM_PWM_Stop(TIM_HandleTypeDef *timer, unsigned channel) {
+HAL_StatusTypeDef HAL_TIM_PWM_Stop(TIM_HandleTypeDef *timer, uint32_t channel) {
   assert(timer==&htim2 && channel==TIM_CHANNEL_3);
   ++baffle_stops; timer->Instance->CCER &= ~TIM_CCER_CC3E; return HAL_OK;
 }
 static void BootInit_DelayMs(uint32_t delay) {
   assert(delay==ROBOT_CAMERA_POWERUP_SETTLE_MS); ++delay_calls;
+  assert(ServoPwm_IsEnabled(SERVO_PWM_CAMERA));
+  assert(!ServoPwm_IsEnabled(SERVO_PWM_BAFFLE) && !ServoPwm_IsEnabled(SERVO_PWM_CLAW));
 }
 static void reset(void) {
   memset(compare,0,sizeof compare); memset(started,0,sizeof started);
@@ -94,7 +86,30 @@ static int osDelayUntil(uint32_t tick) {
 }
 '@
 $cases = @'
+static void CheckRawPwm(void) {
+  const ServoPwm_Channel invalid = (ServoPwm_Channel)-1;
+  reset();
+  ServoPwm_WritePulseUs(SERVO_PWM_BAFFLE, 1234U);
+  assert(compare[TIM_CHANNEL_3]==1234U && !ServoPwm_IsEnabled(SERVO_PWM_BAFFLE));
+  assert(writes[TIM_CHANNEL_3]==1 && !started[TIM_CHANNEL_3]);
+  assert(!writes[TIM_CHANNEL_1] && !writes[TIM_CHANNEL_4]);
+  assert(ServoPwm_Start(SERVO_PWM_BAFFLE)==HAL_OK && ServoPwm_IsEnabled(SERVO_PWM_BAFFLE));
+  assert(ServoPwm_Stop(SERVO_PWM_BAFFLE)==HAL_OK && !ServoPwm_IsEnabled(SERVO_PWM_BAFFLE));
+
+  reset();
+  ServoPwm_WritePulseUs(invalid, 1234U);
+  assert(!ServoPwm_IsEnabled(invalid));
+  assert(ServoPwm_Start(invalid)==HAL_ERROR && ServoPwm_Stop(invalid)==HAL_ERROR);
+  htim2.Instance=0;
+  ServoPwm_WritePulseUs(SERVO_PWM_CAMERA, 1234U);
+  assert(!ServoPwm_IsEnabled(SERVO_PWM_CAMERA));
+  assert(ServoPwm_Start(SERVO_PWM_CAMERA)==HAL_ERROR && ServoPwm_Stop(SERVO_PWM_BAFFLE)==HAL_ERROR);
+  for(unsigned channel=0;channel<4;++channel) assert(!writes[channel] && !started[channel]);
+  assert(!baffle_stops);
+  puts("PASS:raw PWM write never enables output; invalid channels and timer are rejected");
+}
 int main(void) {
+  CheckRawPwm();
   if(ROBOT_MG90_SPEED_TEST_ENABLED && !ROBOT_BAFFLE_TEST_ENABLED && !ROBOT_CLAW_TEST_ENABLED) {
     assert(!ROBOT_FRAME_DOWN_TEST_ENABLED && !ROBOT_STRAIGHT_TEST_ENABLED);
     assert(ROBOT_CAMERA_WIDE_ANGLE_DEG==140U && ROBOT_CAMERA_NEAR_ANGLE_DEG==115U);
@@ -211,8 +226,7 @@ int main(void) {
   puts("PASS:PA5 wide/final24 140,near115;PA2 down155/up80,PA3 closed36;PA2 suspension survives paired poses until explicit resume;independent PWM and startup faults checked");
 }
 '@
-$code = $prefix + "`n" + (Extract-Function 'Actuator_TimerIsValid') + "`n" +
-  (Extract-Function 'Actuator_Mg90AngleToPulse') + "`n" +
+$code = $prefix + "`n" + (Extract-Function 'Actuator_Mg90AngleToPulse') + "`n" +
   (Extract-Function 'Actuator_FrameAngleToPulse') + "`n" +
   (Extract-Function 'Actuator_DeferClawCommand') + "`n" +
   (Extract-Function 'Actuator_SetFrameAngles') + "`n" +
@@ -227,11 +241,12 @@ $code = $prefix + "`n" + (Extract-Function 'Actuator_TimerIsValid') + "`n" +
   (Extract-Function 'Actuator_SetCameraObjectTrackView') + "`n" +
   (Extract-Function 'Actuator_SetCameraSafeZoneView') + "`n" +
   (Extract-Function 'Actuator_SetCameraFinalTrackView') + "`n" +
-  (Extract-Function 'ServoTest_TimerConfigurationIsSafe' $servoSource) + "`n" +
   (Extract-Function 'ServoTest_SetMg90Pulse' $servoSource) + "`n" +
   (Extract-Function 'StartServoTestTask' $servoSource) + "`n" + $cases
 $executable = Join-Path $outputDir 'servo_outputs_cases.exe'
-$code | & $Compiler -std=c11 -Wall -Wextra -Werror -x c - '-I' (Join-Path $projectRoot 'Task') -o $executable
+$code | & $Compiler -std=c11 -Wall -Wextra -Werror -x c - (Join-Path $pwmRoot 'src/servo_pwm.c') `
+  '-I' (Join-Path $pwmRoot 'inc') '-I' (Join-Path $PSScriptRoot 'host/servo_pwm_hal') `
+  '-I' (Join-Path $PSScriptRoot 'host') '-I' (Join-Path $projectRoot 'Task') -o $executable
 if ($LASTEXITCODE -ne 0) { throw 'Servo output test build failed' }
 & $executable
 if ($LASTEXITCODE -ne 0) { throw 'Servo output checks failed' }

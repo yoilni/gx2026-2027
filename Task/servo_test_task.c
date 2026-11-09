@@ -4,15 +4,12 @@
 #include "debug_uart_task.h"
 #include "main.h"
 #include "robot_config.h"
-#include "tim.h"
+#include "servo_pwm.h"
 
 #include <stdint.h>
 
 #define SERVO_TEST_TASK_PERIOD_TICKS  10U
 #define SERVO_TEST_TASK_STACK_BYTES   (256U * 4U)
-
-#define SERVO_TEST_TIMER_PSC          83U
-#define SERVO_TEST_TIMER_ARR          19999U
 
 static osThreadId_t servo_test_task_handle;
 static volatile uint16_t servo_test_pulse_us = ROBOT_MG90_TEST_START_PULSE_US;
@@ -23,13 +20,6 @@ static const osThreadAttr_t servo_test_task_attributes = {
   .priority = (osPriority_t)osPriorityLow,
 };
 
-static bool ServoTest_TimerConfigurationIsSafe(void)
-{
-  return (htim2.Instance == TIM2) &&
-         (htim2.Init.Prescaler == SERVO_TEST_TIMER_PSC) &&
-         (htim2.Init.Period == SERVO_TEST_TIMER_ARR);
-}
-
 uint16_t ServoTest_GetPulseUs(void)
 {
   return servo_test_pulse_us;
@@ -37,8 +27,7 @@ uint16_t ServoTest_GetPulseUs(void)
 
 static void ServoTest_SetMg90Pulse(uint16_t pulse_us)
 {
-  /* PA5 is TIM2 CH1 and TIM2 runs at one count per microsecond. */
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pulse_us);
+  ServoPwm_WritePulseUs(SERVO_PWM_CAMERA, pulse_us);
   if (servo_test_pulse_us != pulse_us)
   {
     servo_test_pulse_us = pulse_us;
@@ -63,7 +52,7 @@ void StartServoTestTask(void *argument)
   uint32_t next_wake;
 
   (void)argument;
-  if (!ServoTest_TimerConfigurationIsSafe())
+  if (!ServoPwm_IsTimerValid())
   {
     DebugUart_Logf("[TEST] MG90 TIM2 ERR\r\n");
     osThreadExit();

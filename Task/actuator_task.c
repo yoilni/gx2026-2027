@@ -2,10 +2,7 @@
 #include "boot_init.h"
 
 #include "robot_config.h"
-#include "tim.h"
-
-#define ACTUATOR_TIM2_EXPECTED_PSC 83U
-#define ACTUATOR_TIM2_EXPECTED_ARR 19999U
+#include "servo_pwm.h"
 
 static uint8_t baffle_pwm_suspended;
 static uint8_t claw_close_guard_active;
@@ -21,13 +18,6 @@ static uint8_t Actuator_DeferClawCommand(uint16_t angle_deg)
 
 static HAL_StatusTypeDef Actuator_SetFrameAngles(uint16_t left_angle_deg,
                                                  uint16_t right_angle_deg);
-
-static uint8_t Actuator_TimerIsValid(void)
-{
-  return (htim2.Instance == TIM2) &&
-         (htim2.Init.Prescaler == ACTUATOR_TIM2_EXPECTED_PSC) &&
-         (htim2.Init.Period == ACTUATOR_TIM2_EXPECTED_ARR);
-}
 
 static uint16_t Actuator_Mg90AngleToPulse(uint16_t angle_deg)
 {
@@ -60,7 +50,7 @@ HAL_StatusTypeDef Actuator_Init(void)
 {
   uint16_t pulse_us;
 
-  if (Actuator_TimerIsValid() == 0U)
+  if (!ServoPwm_IsTimerValid())
   {
     return HAL_ERROR;
   }
@@ -74,8 +64,8 @@ HAL_StatusTypeDef Actuator_Init(void)
 #endif
 
   /* PA5 is TIM2 CH1: initial bench pose or the configured mission wide view. */
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, pulse_us);
-  if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1) != HAL_OK)
+  ServoPwm_WritePulseUs(SERVO_PWM_CAMERA, pulse_us);
+  if (ServoPwm_Start(SERVO_PWM_CAMERA) != HAL_OK)
   {
     return HAL_ERROR;
   }
@@ -86,17 +76,17 @@ HAL_StatusTypeDef Actuator_Init(void)
   /* PA2 baffle and PA3 claw now have independent test angles. Never invoke
      the legacy mirrored-frame setter. Started channels hold in hardware. */
 #if ROBOT_BAFFLE_TEST_ENABLED
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3,
-                       Actuator_FrameAngleToPulse(ROBOT_BAFFLE_TEST_ANGLE_DEG));
-  if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3) != HAL_OK)
+  ServoPwm_WritePulseUs(SERVO_PWM_BAFFLE,
+                        Actuator_FrameAngleToPulse(ROBOT_BAFFLE_TEST_ANGLE_DEG));
+  if (ServoPwm_Start(SERVO_PWM_BAFFLE) != HAL_OK)
   {
     return HAL_ERROR;
   }
 #endif
 #if ROBOT_CLAW_TEST_ENABLED
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4,
-                       Actuator_FrameAngleToPulse(ROBOT_CLAW_TEST_ANGLE_DEG));
-  if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4) != HAL_OK)
+  ServoPwm_WritePulseUs(SERVO_PWM_CLAW,
+                        Actuator_FrameAngleToPulse(ROBOT_CLAW_TEST_ANGLE_DEG));
+  if (ServoPwm_Start(SERVO_PWM_CLAW) != HAL_OK)
   {
     return HAL_ERROR;
   }
@@ -117,7 +107,7 @@ static HAL_StatusTypeDef Actuator_SetFrameAngles(uint16_t left_angle_deg,
   uint16_t left_pulse_us;
   uint16_t right_pulse_us;
 
-  if (Actuator_TimerIsValid() == 0U)
+  if (!ServoPwm_IsTimerValid())
   {
     return HAL_ERROR;
   }
@@ -126,20 +116,20 @@ static HAL_StatusTypeDef Actuator_SetFrameAngles(uint16_t left_angle_deg,
   right_pulse_us = Actuator_FrameAngleToPulse(right_angle_deg);
   if (baffle_pwm_suspended == 0U)
   {
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, left_pulse_us);
+    ServoPwm_WritePulseUs(SERVO_PWM_BAFFLE, left_pulse_us);
   }
   if (Actuator_DeferClawCommand(right_angle_deg) == 0U)
   {
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, right_pulse_us);
+    ServoPwm_WritePulseUs(SERVO_PWM_CLAW, right_pulse_us);
   }
 
-  if (baffle_pwm_suspended == 0U && (htim2.Instance->CCER & TIM_CCER_CC3E) == 0U &&
-      HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3) != HAL_OK)
+  if (baffle_pwm_suspended == 0U && !ServoPwm_IsEnabled(SERVO_PWM_BAFFLE) &&
+      ServoPwm_Start(SERVO_PWM_BAFFLE) != HAL_OK)
   {
     return HAL_ERROR;
   }
-  if ((htim2.Instance->CCER & TIM_CCER_CC4E) == 0U &&
-      HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4) != HAL_OK)
+  if (!ServoPwm_IsEnabled(SERVO_PWM_CLAW) &&
+      ServoPwm_Start(SERVO_PWM_CLAW) != HAL_OK)
   {
     return HAL_ERROR;
   }
@@ -149,11 +139,10 @@ static HAL_StatusTypeDef Actuator_SetFrameAngles(uint16_t left_angle_deg,
 
 HAL_StatusTypeDef Actuator_SetBaffleAngle(uint16_t angle_deg)
 {
-  if (Actuator_TimerIsValid() == 0U) return HAL_ERROR;
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3,
-                       Actuator_FrameAngleToPulse(angle_deg));
-  if ((htim2.Instance->CCER & TIM_CCER_CC3E) == 0U &&
-      HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3) != HAL_OK)
+  if (!ServoPwm_IsTimerValid()) return HAL_ERROR;
+  ServoPwm_WritePulseUs(SERVO_PWM_BAFFLE, Actuator_FrameAngleToPulse(angle_deg));
+  if (!ServoPwm_IsEnabled(SERVO_PWM_BAFFLE) &&
+      ServoPwm_Start(SERVO_PWM_BAFFLE) != HAL_OK)
   {
     return HAL_ERROR;
   }
@@ -163,9 +152,9 @@ HAL_StatusTypeDef Actuator_SetBaffleAngle(uint16_t angle_deg)
 
 HAL_StatusTypeDef Actuator_StopBafflePwm(void)
 {
-  if (Actuator_TimerIsValid() == 0U) return HAL_ERROR;
-  if ((htim2.Instance->CCER & TIM_CCER_CC3E) != 0U &&
-      HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_3) != HAL_OK)
+  if (!ServoPwm_IsTimerValid()) return HAL_ERROR;
+  if (ServoPwm_IsEnabled(SERVO_PWM_BAFFLE) &&
+      ServoPwm_Stop(SERVO_PWM_BAFFLE) != HAL_OK)
   {
     return HAL_ERROR;
   }
@@ -187,8 +176,7 @@ HAL_StatusTypeDef Actuator_SetFrameLowered(void)
 
 HAL_StatusTypeDef Actuator_SetClawAngle(uint16_t angle_deg)
 {
-  if (Actuator_TimerIsValid() == 0U ||
-      (htim2.Instance->CCER & TIM_CCER_CC4E) == 0U)
+  if (!ServoPwm_IsEnabled(SERVO_PWM_CLAW))
   {
     return HAL_ERROR;
   }
@@ -196,8 +184,7 @@ HAL_StatusTypeDef Actuator_SetClawAngle(uint16_t angle_deg)
   /* CH4 is already running; keep PWM continuous and do not move the baffle. */
   if (Actuator_DeferClawCommand(angle_deg) == 0U)
   {
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4,
-                         Actuator_FrameAngleToPulse(angle_deg));
+    ServoPwm_WritePulseUs(SERVO_PWM_CLAW, Actuator_FrameAngleToPulse(angle_deg));
   }
   return HAL_OK;
 }
@@ -272,13 +259,12 @@ HAL_StatusTypeDef Actuator_SetFramePartiallyRaised(uint16_t lift_angle_deg)
 
 static HAL_StatusTypeDef Actuator_SetCameraAngle(uint16_t angle_deg)
 {
-  if (Actuator_TimerIsValid() == 0U)
+  if (!ServoPwm_IsTimerValid())
   {
     return HAL_ERROR;
   }
 
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1,
-      Actuator_Mg90AngleToPulse(angle_deg));
+  ServoPwm_WritePulseUs(SERVO_PWM_CAMERA, Actuator_Mg90AngleToPulse(angle_deg));
   return HAL_OK;
 }
 

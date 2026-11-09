@@ -323,7 +323,7 @@ $redSweepCases = Get-Content (Join-Path $PSScriptRoot 'host/red_e4_sweep_cases.c
 $redSweepPrototype = "`nstatic void verify_red_e4_sweep(void);`n"
 $fineCases = Get-Content (Join-Path $PSScriptRoot 'host/s4_fine_arrange_cases.c') -Raw
 $code = $preamble+"`n"+$globals+"`n"+$prototypes+$redSweepPrototype+$parserInclude+$stubs+"`n"+($functions -join "`n")+"`n"+$arrangeWait+"`n"+$cases+"`n"+$eventCases+"`n"+$frameCases+"`n"+$redSweepCases+"`n"+$fineCases
-$code | & $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" -x c - -o $testExe
+$code | & $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" "-I$projectRoot/User/Hardware/Serial/inc" -x c - -o $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host build failed' }
 & $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host assertions failed' }

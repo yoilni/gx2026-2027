@@ -4,7 +4,7 @@
 #include <string.h>
 #include "hwt101.c"
 #include "jy901s.c"
-#include "imu_task.c"
+#include "imu_device.c"
 
 /* Exercise the real selector and both drivers, including the single shared
    HAL receive buffer. No model-specific driver is stubbed out. */
@@ -51,7 +51,7 @@ HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *u)
   if (abort_result == HAL_OK) rx_destination = NULL;
   return abort_result;
 }
-HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *u, uint8_t *b,
+HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *u, const uint8_t *b,
                                    uint16_t n, uint32_t timeout)
 {
   assert(u == &sensor_uart && n == 5U && timeout == 20U && tx_count < 32U);

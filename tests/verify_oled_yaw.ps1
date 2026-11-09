@@ -91,7 +91,7 @@ $executable = Join-Path $outputDir 'oled_yaw_cases.exe'
 # Compile the actual display functions from stdin; do not rewrite firmware files.
 $code | & $Compiler '-std=c11' '-Wall' '-Wextra' '-Werror' '-x' 'c' '-' `
     '-I' (Join-Path $projectRoot 'tests/host') `
-    '-I' (Join-Path $projectRoot 'HWT101') `
+    '-I' (Join-Path $projectRoot 'User/Hardware/Imu/inc') `
     '-I' (Join-Path $projectRoot 'Task') '-o' $executable
 if ($LASTEXITCODE -ne 0) { throw 'OLED yaw host build failed' }
 & $executable

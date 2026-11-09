@@ -452,7 +452,7 @@ $greenE3Cases = Get-Content (Join-Path $PSScriptRoot 'host/s3_green_e3_cases.c')
 $testSource = Join-Path $outputDir 'verify_s51_e3_stages.c'
 [IO.File]::WriteAllText($testSource,$preamble+"`n"+$eventDefines+"`n"+$globals+"`n"+$prototypes+$parserInclude+$stubs+"`n"+($functions -join "`n")+"`n"+$post22Wait+"`n"+$cases+"`n"+$post22Cases+"`n"+$exit180Cases+"`n"+$debugCases+"`n"+$redFenceCases+"`n"+$materialTripCases+"`n"+$greenE3Cases,[Text.UTF8Encoding]::new($false))
 $testExe = Join-Path $outputDir 'verify_s51_e3_stages.exe'
-& $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" $testSource -o $testExe
+& $Compiler -std=c11 -Wall -Wextra -Wno-unused-function -Wno-unused-variable "-I$projectRoot/tests/host" "-I$projectRoot/Task" "-I$projectRoot/maixcam" "-I$projectRoot/User/Hardware/Serial/inc" $testSource -o $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host build failed' }
 & $testExe
 if ($LASTEXITCODE -ne 0) { throw 'Host assertions failed' }

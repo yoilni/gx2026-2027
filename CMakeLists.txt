@@ -49,8 +49,6 @@ add_executable(${CMAKE_PROJECT_NAME}
         Task/reset_reason.h
         Task/boot_init.c
         Task/boot_init.h
-        Task/imu_task.c
-        Task/imu_task.h
         Task/servo_test_task.c
         Task/servo_test_task.h
         Task/motor_test_task.c
@@ -60,6 +58,7 @@ add_executable(${CMAKE_PROJECT_NAME}
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
+add_subdirectory(User)
 
 # Link directories setup
 target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
@@ -68,13 +67,9 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-        M2006/M2006.c
         M2006/M2006_PID.c
         M2006/M2006_Speed.c
         M2006/M2006_task.c
-        HWT101/hwt101.c
-        JY901S/jy901s.c
-        OLED/oled.c
         OLED/oled_task.c
         Core/Src/led_task.c
     # Add user sources here
@@ -83,8 +78,6 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/M2006
-    ${CMAKE_CURRENT_SOURCE_DIR}/JY901S
-    ${CMAKE_CURRENT_SOURCE_DIR}/HWT101
     ${CMAKE_CURRENT_SOURCE_DIR}/OLED
     ${CMAKE_CURRENT_SOURCE_DIR}/maixcam
     ${CMAKE_CURRENT_SOURCE_DIR}/Task

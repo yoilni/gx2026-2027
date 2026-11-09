@@ -11,6 +11,8 @@ static inline void __disable_irq(void) {}
 static inline void __enable_irq(void) {}
 static inline HAL_StatusTypeDef HAL_UART_Receive_IT(UART_HandleTypeDef *u, uint8_t *b, uint16_t n)
 { (void)u; (void)b; (void)n; ++fake_rx_arms; return HAL_OK; }
-static inline HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *u, uint8_t *b, uint16_t n, uint32_t t)
+static inline HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *u)
+{ (void)u; return HAL_OK; }
+static inline HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *u, const uint8_t *b, uint16_t n, uint32_t t)
 { (void)u; (void)b; (void)n; (void)t; return HAL_OK; }
 #endif

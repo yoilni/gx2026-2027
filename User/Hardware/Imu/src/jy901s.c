@@ -1,4 +1,5 @@
 #include "jy901s.h"
+#include "uart_port.h"
 #include <string.h>
 
 #define JY901S_FRAME_SIZE 11U
@@ -90,7 +91,7 @@ HAL_StatusTypeDef JY901S_Init(UART_HandleTypeDef *huart)
   jy901s_attitude.sequence = 0U;
   jy901s_attitude.update_tick = 0U;
   jy901s_rx_retry_tick = HAL_GetTick();
-  HAL_StatusTypeDef status = HAL_UART_Receive_IT(jy901s_uart, &jy901s_rx_byte, 1U);
+  HAL_StatusTypeDef status = UartPort_ReceiveIT(jy901s_uart, &jy901s_rx_byte, 1U);
   jy901s_rx_armed = status == HAL_OK;
   return status;
 }
@@ -103,7 +104,7 @@ void JY901S_UART_RxCpltCallback(UART_HandleTypeDef *huart)
   }
 
   JY901S_ProcessByte(jy901s_rx_byte);
-  jy901s_rx_armed = HAL_UART_Receive_IT(jy901s_uart, &jy901s_rx_byte, 1U) == HAL_OK;
+  jy901s_rx_armed = UartPort_ReceiveIT(jy901s_uart, &jy901s_rx_byte, 1U) == HAL_OK;
 }
 
 void JY901S_UART_ErrorCallback(UART_HandleTypeDef *huart)
@@ -112,8 +113,8 @@ void JY901S_UART_ErrorCallback(UART_HandleTypeDef *huart)
   {
     jy901s_frame_index = 0U;
     jy901s_has_attitude = 0U;
-    (void)HAL_UART_AbortReceive(jy901s_uart);
-    jy901s_rx_armed = HAL_UART_Receive_IT(jy901s_uart, &jy901s_rx_byte, 1U) == HAL_OK;
+    (void)UartPort_AbortReceive(jy901s_uart);
+    jy901s_rx_armed = UartPort_ReceiveIT(jy901s_uart, &jy901s_rx_byte, 1U) == HAL_OK;
   }
 }
 
@@ -125,7 +126,7 @@ void JY901S_Service(uint32_t now)
   uint32_t primask = __get_PRIMASK();
   __disable_irq();
   if (!jy901s_rx_armed)
-    jy901s_rx_armed = HAL_UART_Receive_IT(jy901s_uart, &jy901s_rx_byte, 1U) == HAL_OK;
+    jy901s_rx_armed = UartPort_ReceiveIT(jy901s_uart, &jy901s_rx_byte, 1U) == HAL_OK;
   if (primask == 0U) __enable_irq();
 }
 

@@ -1,4 +1,5 @@
 #include "maixcam_task.h"
+#include "uart_port.h"
 
 typedef enum
 {
@@ -752,7 +753,7 @@ HAL_StatusTypeDef MaixCam_Init(UART_HandleTypeDef *huart)
   maixcam_load_recheck_report.object_id = 0U;
   maixcam_load_recheck_report.sequence = 0U;
   maixcam_load_recheck_finish_report.object_id = 0U;
-  return HAL_UART_Receive_IT(maixcam_uart, &maixcam_rx_byte, 1U);
+  return UartPort_ReceiveIT(maixcam_uart, &maixcam_rx_byte, 1U);
 }
 
 HAL_StatusTypeDef MaixCam_SendCommand(uint8_t command)
@@ -770,7 +771,7 @@ HAL_StatusTypeDef MaixCam_SendCommand(uint8_t command)
     return HAL_ERROR;
   }
 
-  return HAL_UART_Transmit(maixcam_uart, frame, sizeof(frame), 20U);
+  return UartPort_Transmit(maixcam_uart, frame, sizeof(frame), 20U);
 }
 
 void MaixCam_ClearObject(void)
@@ -898,7 +899,7 @@ void MaixCam_UART_RxCpltCallback(UART_HandleTypeDef *huart)
   }
 
   MaixCam_ProcessByte(maixcam_rx_byte);
-  (void)HAL_UART_Receive_IT(maixcam_uart, &maixcam_rx_byte, 1U);
+  (void)UartPort_ReceiveIT(maixcam_uart, &maixcam_rx_byte, 1U);
 }
 
 void MaixCam_UART_ErrorCallback(UART_HandleTypeDef *huart)
@@ -909,7 +910,7 @@ void MaixCam_UART_ErrorCallback(UART_HandleTypeDef *huart)
     maixcam_parser_state = MAIXCAM_WAIT_HEADER_1;
     maixcam_discard_current_frame = 0U;
     maixcam_discard_object_frame = 0U;
-    (void)HAL_UART_Receive_IT(maixcam_uart, &maixcam_rx_byte, 1U);
+    (void)UartPort_ReceiveIT(maixcam_uart, &maixcam_rx_byte, 1U);
   }
 }
 

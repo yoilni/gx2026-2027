@@ -4,6 +4,7 @@
 #include "debug_uart_task.h"
 #include "main.h"
 #include "mission_task.h"
+#include "switch_input.h"
 
 #include <stdint.h>
 
@@ -41,7 +42,7 @@ void StartStartButtonTask(void *argument)
   uint32_t next_wake;
 
   (void)argument;
-  last_sample = HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_12);
+  last_sample = SwitchInput_ReadStart();
   stable_state = last_sample;
 
   /* A button held during reset cannot start the vehicle. It must first be
@@ -51,7 +52,7 @@ void StartStartButtonTask(void *argument)
 
   for (;;)
   {
-    candidate = HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_12);
+    candidate = SwitchInput_ReadStart();
     if (candidate == last_sample)
     {
       if (stable_samples < START_BUTTON_DEBOUNCE_SAMPLES)

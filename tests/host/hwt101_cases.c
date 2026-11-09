@@ -22,7 +22,7 @@ HAL_StatusTypeDef HAL_UART_Receive_IT(UART_HandleTypeDef *u, uint8_t *b, uint16_
 {
   assert(u == &imu_uart && n == 1); ++rx_count; rx_destination = b; return rx_status;
 }
-HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *u, uint8_t *b, uint16_t n, uint32_t timeout)
+HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *u, const uint8_t *b, uint16_t n, uint32_t timeout)
 {
   assert(u == &imu_uart && n == 5 && timeout == 20 && tx_count < 4);
   memcpy(tx_packets[tx_count], b, 5); tx_ticks[tx_count++] = now_ms;

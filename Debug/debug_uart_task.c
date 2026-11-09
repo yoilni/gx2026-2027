@@ -2,6 +2,7 @@
 
 #include "cmsis_os.h"
 #include "reset_reason.h"
+#include "uart_port.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -40,8 +41,8 @@ static void DebugUart_Transmit(const char *text)
   length = strnlen(text, DEBUG_UART_MESSAGE_CAPACITY);
   if (length != 0U)
   {
-    (void)HAL_UART_Transmit(debug_uart, (uint8_t *)text,
-                           (uint16_t)length, DEBUG_UART_TX_TIMEOUT_MS);
+    (void)UartPort_Transmit(debug_uart, (const uint8_t *)text,
+                            (uint16_t)length, DEBUG_UART_TX_TIMEOUT_MS);
   }
 }
 
