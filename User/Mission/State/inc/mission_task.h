@@ -38,7 +38,7 @@ typedef enum
   MISSION_STATE_S4_ARRANGE_RECOVERY_REVERSE,
   MISSION_STATE_S4_ARRANGE_RECOVERY_TURN_LEFT,
   MISSION_STATE_S4_ARRANGE_RECOVERY_TURN_BACK,
-  MISSION_STATE_S4_RAISE_FRAME, /* Legacy ID:24 claw-open handoff, no delay. */
+  MISSION_STATE_S4_RAISE_FRAME, /* Legacy ID:24 tracking handoff. */
   MISSION_STATE_S4_TRACK_FINAL_BLOCK,
   MISSION_STATE_S4_FINAL_RECOVERY_REVERSE,
   MISSION_STATE_S4_FINAL_RECOVERY_TURN_270,
@@ -135,7 +135,8 @@ typedef enum
   MISSION_STATE_S6_EXIT_CLAW_OPEN_WAIT, /* Reserved ID: closing now runs in parallel. */
   MISSION_STATE_S4_FINAL_TURN_SAFE, /* 34: align before requesting05. */
   MISSION_STATE_S4_CASUALTY_REGRIP, /* 54: one timed push after the34 turn. */
-  MISSION_STATE_S4_FINAL_TIMEOUT_BACKOFF /* 24 timeout: timed reverse before03. */
+  MISSION_STATE_S4_FINAL_TIMEOUT_BACKOFF, /* 24 timeout: timed reverse before03. */
+  MISSION_STATE_S5_CASUALTY_EMPTY_WIDE_SETTLE /* Red timeout check found no load. */
 } MissionState;
 
 typedef enum
@@ -194,6 +195,7 @@ typedef struct
   int16_t left_target_rpm;
   int16_t right_target_rpm;
   uint8_t target_id;
+  uint8_t target_geometry;
   uint32_t target_sequence;
   uint32_t target_age_ms; /* UINT32_MAX means no coordinate has been received. */
   int16_t vision_x_error_px;

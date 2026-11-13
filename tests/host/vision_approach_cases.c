@@ -5,6 +5,7 @@ static void approach_setup(MissionState state, uint8_t reference) {
   mission_snapshot.state_entry_tick = fake_now = 100;
   mission_snapshot.target_id = 5;
   mission_snapshot.vision_target_valid = true;
+  mission_snapshot.imu_valid = true;
   supplement_reference_command = reference;
   s3_search_sweep_completed = false;
   MissionTask_ResetVisionControllerState();
@@ -87,7 +88,7 @@ static void verify_vision_approach(void) {
   //actual03 caller (not just the helper). Positive -> negative is held at0.
   approach_setup(MISSION_STATE_S3_TRACK_GREEN,0x03);
   const int16_t errors[]={-128,33,-132,0,50,50};
-  const int expected[]={158,0,159,0,0,-30};
+  const int expected[]={158,0,159,0,0,0};
   for (unsigned i=0; i<sizeof(errors)/sizeof(errors[0]); ++i) {
     fake_now+=100; ++mission_snapshot.target_sequence;
     mission_snapshot.target_age_ms=0;
@@ -120,7 +121,7 @@ static void verify_vision_approach(void) {
     assert(!mission_snapshot.left_target_rpm);
     assert(approach_frame(50)==-30);
     assert(MissionTask_CommandS4VisionTracking(fake_now,&reached));
-    assert(mission_snapshot.left_target_rpm==-30 && mission_snapshot.right_target_rpm==-30);
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
   }
   //Changing supplement reference or task resets the pending candidate.
   approach_setup(MISSION_STATE_SUPPLEMENT_TRACK,0x03);
@@ -162,6 +163,8 @@ static void verify_vision_approach(void) {
     else assert(MissionTask_CommandS4VisionTracking(fake_now+20,&reached));
     assert(mission_snapshot.left_target_rpm<=cap && mission_snapshot.right_target_rpm<=cap);
     assert(mission_snapshot.left_target_rpm>90 && mission_snapshot.right_target_rpm>90);
+    assert(mission_snapshot.left_target_rpm!=mission_snapshot.right_target_rpm);
+    assert(mission_snapshot.vision_forward_rpm && mission_snapshot.vision_turn_rpm);
   }
   // Every03 band boundary reaches the real ordinary/supplement wheel callers.
   const int16_t ys[]={0,12,13,50,80,81,140,199,200,324,448};
@@ -192,5 +195,113 @@ static void verify_vision_approach(void) {
     assert(mission_snapshot.left_target_rpm<=120 && mission_snapshot.right_target_rpm<=120);
     assert(approach_frame(50)==0 && approach_frame(50)==-30);
   }
-  puts("PASS:03+supplement03 forward100..150/150..170/170..200,448px reaches200 through actual wheel callers,80/81+199/200 boundaries and200 wheel cap;04 unchanged70..100/120..150/150..170,24 near40..70/far120,reverse30/two-frame guard,deadband/freshness/wrap/fades;06 unchanged");
+  puts("PASS:03/04/24 and supplement retain forward speed bands and fade; aligned targets cannot request reverse PID; raw PID reverse guard and06 unchanged");
+}
+
+static void claw_approach_tick(unsigned stage, uint32_t delta, bool new_frame, int16_t x, int16_t y) {
+  fake_now+=delta;
+  if(new_frame) { ++mission_snapshot.target_sequence; mission_snapshot.target_age_ms=0; }
+  else mission_snapshot.target_age_ms+=delta;
+  mission_snapshot.vision_x_error_px=x;
+  mission_snapshot.vision_y_error_px=y;
+  if(stage==0) MissionTask_RunS3Track(fake_now);
+  else (void)MissionTask_CommandS4VisionTracking(fake_now,NULL);
+}
+
+static void verify_claw_tracking_motion_order(void) {
+  const MissionState states[]={MISSION_STATE_S3_TRACK_GREEN,MISSION_STATE_S4_TRACK_CENTER,
+      MISSION_STATE_S4_TRACK_FINAL_BLOCK,MISSION_STATE_SUPPLEMENT_TRACK,
+      MISSION_STATE_SUPPLEMENT_TRACK,MISSION_STATE_SUPPLEMENT_TRACK};
+  const uint8_t refs[]={0x03,0x04,0x24,0x03,0x04,0x24};
+  const int16_t align_limits[]={65,50,70,65,50,70};
+  const int16_t near_limits[]={30,20,40,30,20,40};
+  for(unsigned stage=0;stage<sizeof(refs);++stage) {
+    approach_setup(states[stage],refs[stage]);
+    moto_chassis[MISSION_LEFT_MOTOR_INDEX].speed_rpm=400;
+    claw_approach_tick(stage,20,true,50,-100);
+    assert(mission_snapshot.left_target_rpm>0 && mission_snapshot.right_target_rpm>0);
+    assert(mission_snapshot.vision_forward_rpm>0 && mission_snapshot.vision_turn_rpm);
+    claw_approach_tick(stage,20,true,50,-align_limits[stage]);
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+    moto_chassis[MISSION_LEFT_MOTOR_INDEX].speed_rpm=0;
+    claw_approach_tick(stage,20,true,50,-align_limits[stage]);
+    assert(mission_snapshot.left_target_rpm && mission_snapshot.left_target_rpm==-mission_snapshot.right_target_rpm);
+    moto_chassis[MISSION_RIGHT_MOTOR_INDEX].speed_rpm=-400;
+    claw_approach_tick(stage,20,true,15,-align_limits[stage]);
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+    moto_chassis[MISSION_RIGHT_MOTOR_INDEX].speed_rpm=0;
+    mission_snapshot.yaw_cdeg=35900;
+    claw_approach_tick(stage,20,true,15,-align_limits[stage]);
+    assert(mission_snapshot.left_target_rpm>0 && mission_snapshot.left_target_rpm==mission_snapshot.right_target_rpm);
+    assert(vision_motion.claw.heading_latched && vision_motion.claw.heading_cdeg==35900);
+    claw_approach_tick(stage,20,true,20,-align_limits[stage]);
+    assert(mission_snapshot.left_target_rpm>0 && mission_snapshot.left_target_rpm==mission_snapshot.right_target_rpm);
+    mission_snapshot.yaw_cdeg=100;
+    claw_approach_tick(stage,20,true,20,-align_limits[stage]);
+    assert(mission_snapshot.left_target_rpm>0 && mission_snapshot.right_target_rpm>0);
+    assert(mission_snapshot.vision_turn_rpm * ROBOT_YAW_LEFT_SIGN>0);
+    assert(vision_motion.claw.heading_cdeg==35900);
+    mission_snapshot.yaw_cdeg=1900;
+    claw_approach_tick(stage,20,true,20,-align_limits[stage]);
+    assert(mission_snapshot.vision_turn_rpm==ROBOT_VISION_CLAW_YAW_MAX_RPM*ROBOT_YAW_LEFT_SIGN);
+    moto_chassis[MISSION_RIGHT_MOTOR_INDEX].speed_rpm=-400;
+    claw_approach_tick(stage,20,true,21,-near_limits[stage]);
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+    assert(!vision_motion.claw.heading_latched);
+    moto_chassis[MISSION_RIGHT_MOTOR_INDEX].speed_rpm=0;
+    claw_approach_tick(stage,20,true,21,-near_limits[stage]);
+    assert(mission_snapshot.left_target_rpm==-60 && mission_snapshot.right_target_rpm==-60);
+    claw_approach_tick(stage,199,true,0,-100);
+    assert(mission_snapshot.left_target_rpm==-60 && mission_snapshot.right_target_rpm==-60);
+    moto_chassis[MISSION_RIGHT_MOTOR_INDEX].speed_rpm=400;
+    claw_approach_tick(stage,1,false,0,-100);
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+    claw_approach_tick(stage,20,true,50,-near_limits[stage]);
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+    moto_chassis[MISSION_RIGHT_MOTOR_INDEX].speed_rpm=0;
+    claw_approach_tick(stage,20,false,50,-near_limits[stage]);
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+    claw_approach_tick(stage,20,false,50,-near_limits[stage]);
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+    claw_approach_tick(stage,20,true,50,-100);
+    assert(mission_snapshot.left_target_rpm && mission_snapshot.left_target_rpm==-mission_snapshot.right_target_rpm);
+    mission_snapshot.yaw_cdeg=2400;
+    claw_approach_tick(stage,20,true,0,-100);
+    assert(mission_snapshot.left_target_rpm>0 && mission_snapshot.left_target_rpm==mission_snapshot.right_target_rpm);
+    assert(vision_motion.claw.heading_latched && vision_motion.claw.heading_cdeg==2400);
+    mission_snapshot.imu_valid=false;
+    claw_approach_tick(stage,20,true,0,-100);
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+    assert(!vision_motion.claw.heading_latched);
+    mission_snapshot.imu_valid=true;
+    claw_approach_tick(stage,20,true,0,20);
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+    claw_approach_tick(stage,20,true,50,-near_limits[stage]);
+    assert(mission_snapshot.left_target_rpm==-60 && mission_snapshot.right_target_rpm==-60);
+    mission_snapshot.vision_target_valid=false;
+    claw_approach_tick(stage,20,false,50,-near_limits[stage]);
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+  }
+  // Area, not only the vertical coordinate, must stop a near diagonal
+  // approach. Test a falsely "far" Y while the target grows off center.
+  for (unsigned stage=0;stage<sizeof(refs);++stage) {
+    approach_setup(states[stage],refs[stage]);
+    moto_chassis[MISSION_LEFT_MOTOR_INDEX].speed_rpm=400;
+    claw_approach_tick(stage,20,true,50,-150);
+    assert(mission_snapshot.vision_forward_rpm>0 && mission_snapshot.vision_turn_rpm);
+    mission_snapshot.target_geometry=MAIXCAM_OBJECT_GEOMETRY_PRESENT|MAIXCAM_OBJECT_GEOMETRY_NEAR;
+    claw_approach_tick(stage,20,true,50,-150);
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+    moto_chassis[MISSION_LEFT_MOTOR_INDEX].speed_rpm=0;
+    claw_approach_tick(stage,20,true,50,-150);
+    assert(!mission_snapshot.vision_forward_rpm && mission_snapshot.vision_turn_rpm);
+    claw_approach_tick(stage,20,true,15,-150);
+    assert(mission_snapshot.vision_forward_rpm==ROBOT_VISION_CLAW_AREA_APPROACH_MAX_RPM);
+    mission_snapshot.target_geometry|=MAIXCAM_OBJECT_GEOMETRY_OPEN_AREA;
+    claw_approach_tick(stage,20,true,15,-150);
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+    claw_approach_tick(stage,20,true,16,-150);
+    assert(mission_snapshot.left_target_rpm==-60 && mission_snapshot.right_target_rpm==-60);
+  }
+  puts("PASS:03/04/24 and supplement: far XY,near brake/align/gyro-held straight,15/20px hysteresis,359->1 yaw wrap and correction cap,IMU loss stops,60/200 retreat with fresh XY and no return to far steering");
 }

@@ -64,7 +64,8 @@ bool MissionTask_CanPauseForLoadCheck(void)
 
 bool MissionTask_CanLatchCasualtyRegrip(MissionState state)
 {
-  return mission_ctx.s3_target_select_command == MAIXCAM_COMMAND_SELECT_RED &&
+  return !mission_ctx.s5_casualty_timeout_check &&
+      mission_ctx.s3_target_select_command == MAIXCAM_COMMAND_SELECT_RED &&
       (state == MISSION_STATE_S4_RAISE_FRAME ||
        state == MISSION_STATE_S4_TRACK_FINAL_BLOCK ||
        state == MISSION_STATE_S4_FINAL_RECOVERY_REVERSE ||
@@ -85,6 +86,7 @@ static void MissionTask_UpdateS5CarriedObject(uint32_t now)
     return;
   }
   if (!mission_ctx.s5_close_view_active || !MaixCam_GetObjectSnapshot(&object) ||
+      (object.geometry & MAIXCAM_OBJECT_GEOMETRY_PRESENT) != 0U ||
       (int32_t)(object.sequence - s5_load_check_sequence_floor) <= 0 ||
       (uint32_t)(now - object.update_tick) > MISSION_VISION_TARGET_TIMEOUT_MS ||
       object.object_id < 3U || object.object_id > 6U)
@@ -127,7 +129,8 @@ void MissionTask_EnterS5(uint32_t now)
      into a 51 capture; prefer the actual black/green tracking ID. */
   if (!mission_ctx.supplement_budget_started)
   {
-    mission_ctx.s6_carried_object_id = MissionTask_GetSelectedObjectId();
+    mission_ctx.s6_carried_object_id = mission_ctx.s5_casualty_timeout_check
+        ? 0U : MissionTask_GetSelectedObjectId();
     mission_ctx.s5_load_class_confirmed = false;
   }
   mission_ctx.supplement_capture_active = false;
@@ -170,27 +173,37 @@ static void MissionTask_StartS5Arrange02(uint32_t now)
   mission_ctx.mission_snapshot.vision_target_valid = false;
   MissionTask_ResetVisionPid();
   MissionTask_ResetS6ControllerState();
-  if (Actuator_SetClawAngle(ROBOT_CLAW_ARRANGE02_OPEN_DEG) != HAL_OK)
+  /* Set the search view now so it has settled before the next TX03. */
+  if (Actuator_SetCameraObjectTrackView() != HAL_OK ||
+      Actuator_SetClawAngle(ROBOT_CLAW_ARRANGE02_OPEN_DEG) != HAL_OK)
   {
     mission_ctx.mission_snapshot.fault_flags |= MISSION_FAULT_ACTUATOR;
     MissionTask_EnterState(MISSION_STATE_FAULT, now);
     return;
   }
+  mission_ctx.s5_arrange_backing = false;
   MissionTask_EnterState(MISSION_STATE_S5_REVERSE_FOR_ARRANGE, now);
   MissionTask_RecordInitialGreenPush(MAIXCAM_EVENT_ARRANGE_READY);
-  mission_ctx.mission_snapshot.vision_forward_rpm = -ROBOT_S5_ARRANGE_REVERSE_RPM;
+  mission_ctx.mission_snapshot.vision_forward_rpm = 0;
   mission_ctx.mission_snapshot.vision_turn_rpm = 0;
-  MissionTask_SetWheelTargets(-ROBOT_S5_ARRANGE_REVERSE_RPM,
-                              -ROBOT_S5_ARRANGE_REVERSE_RPM);
-  (void)DebugUart_Logf("[02] OPEN=%u BACK=%d/%lu\r\n",
-      (unsigned int)ROBOT_CLAW_ARRANGE02_OPEN_DEG, ROBOT_S5_ARRANGE_REVERSE_RPM,
-      (unsigned long)ROBOT_S5_ARRANGE_REVERSE_MS);
+  (void)DebugUart_Logf("[05/02] OPEN=%u WAIT=%lu >BACK\r\n",
+      (unsigned int)ROBOT_CLAW_ARRANGE02_OPEN_DEG,
+      (unsigned long)ROBOT_S5_ARRANGE_CLAW_OPEN_SETTLE_MS);
 }
 
 void MissionTask_RunS5WaitSingleGreen(uint32_t now)
 {
   uint8_t event_code;
   MaixCam_Object load_check_object;
+
+  if (mission_ctx.mission_snapshot.state == MISSION_STATE_S5_CASUALTY_EMPTY_WIDE_SETTLE)
+  {
+    MissionTask_StopWheels();
+    if ((uint32_t)(now - mission_ctx.mission_snapshot.state_entry_tick) >=
+        ROBOT_S5_CASUALTY_EMPTY_WIDE_SETTLE_MS)
+      MissionTask_RetryS3AfterS4(now, false);
+    return;
+  }
 
   if (mission_ctx.mission_snapshot.state != MISSION_STATE_S5_WAIT_SINGLE_GREEN &&
       mission_ctx.mission_snapshot.state != MISSION_STATE_SUPPLEMENT_LOAD_CHECK &&
@@ -258,6 +271,11 @@ void MissionTask_RunS5WaitSingleGreen(uint32_t now)
 
   if (event_code == MAIXCAM_EVENT_SKIP_TO_FINAL_TRACK)
   {
+    if (mission_ctx.s5_casualty_timeout_check && !mission_ctx.s5_close_view_active)
+    {
+      (void)DebugUart_Log("[05] IGNORE24 WAIT RX05\r\n");
+      return;
+    }
     if (rechecking)
     {
       MaixCam_SetLoadRecheckEnabled(false);
@@ -270,6 +288,18 @@ void MissionTask_RunS5WaitSingleGreen(uint32_t now)
     mission_ctx.s5_load_class_confirmed = false;
     mission_ctx.s5_recheck_resume_safe_tracking = false;
     mission_ctx.s6_corner_completed = false;
+    if (mission_ctx.s5_casualty_timeout_check)
+    {
+      if (Actuator_SetCameraObjectTrackView() != HAL_OK)
+      {
+        mission_ctx.mission_snapshot.fault_flags |= MISSION_FAULT_ACTUATOR;
+        MissionTask_EnterState(MISSION_STATE_FAULT, now);
+        return;
+      }
+      MissionTask_EnterState(MISSION_STATE_S5_CASUALTY_EMPTY_WIDE_SETTLE, now);
+      (void)DebugUart_Log("[05] RED EMPTY RX24 >WIDE >03\r\n");
+      return;
+    }
     (void)DebugUart_Logf(
         "[05] RX24 EMPTY >24\r\n");
     MissionTask_SkipToS4FinalTrack(now);
@@ -620,6 +650,7 @@ void MissionTask_RunS6LoadRecheck(uint32_t now)
       MaixCam_TakeLoadRecheckFinish(&report))
   {
     if (report.object_id < 3U || report.object_id > 6U ||
+        (mission_ctx.s5_casualty_timeout_check && report.object_id != 4U) ||
         (!mission_ctx.s7_target_switch_enabled && report.object_id != 5U))
     {
       MaixCam_ClearEvent();
@@ -672,9 +703,22 @@ void MissionTask_RunS6LoadRecheck(uint32_t now)
 
 void MissionTask_RunS5PrepareArrange(uint32_t now)
 {
-  if (mission_ctx.mission_snapshot.state != MISSION_STATE_S5_REVERSE_FOR_ARRANGE ||
-      (uint32_t)(now - mission_ctx.mission_snapshot.state_entry_tick) < ROBOT_S5_ARRANGE_REVERSE_MS)
+  if (mission_ctx.mission_snapshot.state != MISSION_STATE_S5_REVERSE_FOR_ARRANGE) return;
+
+  const uint32_t elapsed = now - mission_ctx.mission_snapshot.state_entry_tick;
+  if (!mission_ctx.s5_arrange_backing)
+  {
+    if (elapsed < ROBOT_S5_ARRANGE_CLAW_OPEN_SETTLE_MS) return;
+    mission_ctx.s5_arrange_backing = true;
+    mission_ctx.mission_snapshot.state_entry_tick = now;
+    mission_ctx.mission_snapshot.vision_forward_rpm = -ROBOT_S5_ARRANGE_REVERSE_RPM;
+    mission_ctx.mission_snapshot.vision_turn_rpm = 0;
+    MissionTask_SetWheelTargets(-ROBOT_S5_ARRANGE_REVERSE_RPM, -ROBOT_S5_ARRANGE_REVERSE_RPM);
+    (void)DebugUart_Logf("[05/02] BACK=%d/%lu\r\n", ROBOT_S5_ARRANGE_REVERSE_RPM,
+        (unsigned long)ROBOT_S5_ARRANGE_REVERSE_MS);
     return;
+  }
+  if (elapsed < ROBOT_S5_ARRANGE_REVERSE_MS) return;
 
   MissionTask_RetryS3AfterS4(now, true);
 }

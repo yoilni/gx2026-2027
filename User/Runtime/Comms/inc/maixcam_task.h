@@ -22,6 +22,13 @@
 #define MAIXCAM_Y_ERROR_MAX    448U
 #define MAIXCAM_DATA_TIMEOUT_MS 500U
 
+/* In object tracking only: upper ID bits report same-frame box geometry.
+   Untagged IDs are still used for safe zones, arrangement and load reports. */
+#define MAIXCAM_OBJECT_GEOMETRY_ID_MASK 0x0FU
+#define MAIXCAM_OBJECT_GEOMETRY_PRESENT 0x80U
+#define MAIXCAM_OBJECT_GEOMETRY_NEAR 0x40U
+#define MAIXCAM_OBJECT_GEOMETRY_OPEN_AREA 0x20U
+
 /* MCU -> MaixCam short command frame: E1 E2 CMD 1E 2E. */
 #define MAIXCAM_COMMAND_HEADER_1 0xE1U
 #define MAIXCAM_COMMAND_HEADER_2 0xE2U
@@ -67,6 +74,9 @@
 #define MAIXCAM_EVENT_SIDE_PUSH 0x42U
 #define MAIXCAM_EVENT_SKIP_TO_FINAL_TRACK 0x24U
 #define MAIXCAM_EVENT_FINAL_OBJECT_IN_FRAME 0x34U
+/* Incoming capture event with visual area and center verified; normalized
+   to the internal 34 event. MCU -> vision capture ACK stays 34. */
+#define MAIXCAM_EVENT_GEOMETRY_CAPTURE 0x64U
 #define MAIXCAM_EVENT_CASUALTY_REGRIP 0x54U
 #define MAIXCAM_EVENT_LOAD_CHECK_REQUEST 0x05U
 #define MAIXCAM_EVENT_CASUALTY_LOAD_ADJUST 0x45U
@@ -87,6 +97,7 @@
 typedef struct
 {
   uint8_t object_id;
+  uint8_t geometry;
   int16_t x_error_px;
   int16_t y_error_px;
   uint32_t sequence;

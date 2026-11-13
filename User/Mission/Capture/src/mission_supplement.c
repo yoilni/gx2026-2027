@@ -374,7 +374,7 @@ void MissionTask_RunSupplement(uint32_t now)
       mission_ctx.supplement_recovery_event = 0U;
       MissionTask_SkipToS4FinalTrack(now);
       if (mission_ctx.mission_snapshot.state == MISSION_STATE_S4_RAISE_FRAME)
-        (void)DebugUart_Log("[SUPP] RX24 >24 CLAW OPEN\r\n");
+        (void)DebugUart_Log("[SUPP] RX24 >24 CLAW CLOSED\r\n");
       return;
     }
     if (event_code == MAIXCAM_EVENT_OBJECT_IN_FRAME)

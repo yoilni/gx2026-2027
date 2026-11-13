@@ -157,6 +157,7 @@ void MissionTask_UpdateVisionInput(uint32_t now)
   MaixCam_Object object;
   bool object_present = MaixCam_GetObjectSnapshot(&object);
   mission_ctx.mission_snapshot.target_present = object_present;
+  mission_ctx.mission_snapshot.target_geometry = object_present ? object.geometry : 0U;
   mission_ctx.mission_snapshot.target_age_ms = object.sequence != 0U
       ? (uint32_t)(now - object.update_tick) : UINT32_MAX;
   mission_ctx.mission_snapshot.vision_target_valid = object_present &&
@@ -1183,12 +1184,88 @@ void MissionTask_SetVisionTrackingTargets(int16_t forward_rpm,
   MissionTask_SetTrackingTargets(forward_rpm, turn_rpm, wheel_max_rpm);
 }
 
+void MissionTask_CommandClawApproach(uint32_t now, int16_t turn_limit,
+                                    int16_t forward_limit, int16_t wheel_limit)
+{
+  const MissionState state = mission_ctx.mission_snapshot.state;
+  const uint8_t reference = state == MISSION_STATE_SUPPLEMENT_TRACK
+      ? mission_ctx.supplement_reference_command : 0U;
+  const VisionMotion_Frame frame = {
+    .context = ((uint32_t)state << 8U) | reference,
+    .sequence = mission_ctx.mission_snapshot.target_sequence,
+    .age_ms = mission_ctx.mission_snapshot.target_age_ms,
+    .timeout_ms = MISSION_VISION_TARGET_TIMEOUT_MS,
+    .target_id = mission_ctx.mission_snapshot.target_id,
+    .area_near = (mission_ctx.mission_snapshot.target_geometry & MAIXCAM_OBJECT_GEOMETRY_NEAR) != 0U,
+    .area_open = (mission_ctx.mission_snapshot.target_geometry & MAIXCAM_OBJECT_GEOMETRY_OPEN_AREA) != 0U,
+    .claw_closed = MissionTask_GetVisionMotionProfile() != VISION_MOTION_FINAL ||
+                   !mission_ctx.s4_capture_claw_open,
+    .valid = mission_ctx.mission_snapshot.vision_target_valid,
+  };
+  const bool wheels_stopped =
+      MissionTask_Abs32(moto_chassis[MISSION_LEFT_MOTOR_INDEX].speed_rpm) <= ROBOT_VISION_CLAW_STOP_MOTOR_RPM &&
+      MissionTask_Abs32(moto_chassis[MISSION_RIGHT_MOTOR_INDEX].speed_rpm) <= ROBOT_VISION_CLAW_STOP_MOTOR_RPM;
+  const int16_t x_error = mission_ctx.mission_snapshot.vision_x_error_px;
+  const int16_t y_error = mission_ctx.mission_snapshot.vision_y_error_px;
+  const uint8_t previous_drive = mission_ctx.vision_motion.claw.last_drive;
+  const VisionMotion_ClawDrive drive = VisionMotion_ClawApproachStep(
+      &mission_ctx.vision_motion.claw, MissionTask_GetVisionMotionProfile(),
+      &frame, now, x_error, y_error, wheels_stopped);
+  int16_t turn = 0, forward = 0;
+  if (drive != VISION_CLAW_ALIGN && drive != VISION_CLAW_FAR_TRACK)
+    VisionMotion_ResetAxis(&mission_ctx.vision_motion.x);
+  if (drive != VISION_CLAW_STRAIGHT && drive != VISION_CLAW_FAR_TRACK)
+    VisionMotion_ResetAxis(&mission_ctx.vision_motion.y);
+  if (drive != VISION_CLAW_STRAIGHT || !mission_ctx.mission_snapshot.imu_valid)
+    VisionMotion_ClawResetHeading(&mission_ctx.vision_motion.claw);
+  switch (drive)
+  {
+    case VISION_CLAW_FAR_TRACK:
+      /* Preserve the original simultaneous image X/Y control at distance. */
+      forward = MissionTask_CalculateVisionForward(now, y_error);
+      if (MissionTask_Abs32(x_error) > ROBOT_VISION_X_TOLERANCE_PX)
+        turn = MissionTask_CalculateVisionTurn(now, x_error);
+      else
+        VisionMotion_ResetAxis(&mission_ctx.vision_motion.x);
+      break;
+    case VISION_CLAW_ALIGN:
+      turn = MissionTask_CalculateVisionTurn(now, x_error);
+      break;
+    case VISION_CLAW_STRAIGHT:
+    {
+      if (!mission_ctx.mission_snapshot.imu_valid) break;
+      forward = MissionTask_CalculateVisionForward(now, y_error);
+      if (forward < 0 || (int32_t)y_error * ROBOT_VISION_Y_FORWARD_SIGN <= ROBOT_VISION_Y_TOLERANCE_PX)
+        forward = 0;
+      if ((frame.area_near || frame.area_open) && forward > ROBOT_VISION_CLAW_AREA_APPROACH_MAX_RPM)
+        forward = ROBOT_VISION_CLAW_AREA_APPROACH_MAX_RPM;
+      const int16_t correction = VisionMotion_ClawHoldHeading(&mission_ctx.vision_motion.claw,
+          now, mission_ctx.mission_snapshot.yaw_cdeg, MISSION_TASK_PERIOD_TICKS);
+      if (forward > 0) turn = correction;
+      break;
+    }
+    case VISION_CLAW_BACKOFF:
+      forward = -ROBOT_VISION_CLAW_BACKOFF_RPM;
+      if (previous_drive != VISION_CLAW_BACKOFF)
+        (void)DebugUart_Logf("[CLAW-TRACK] s=%u x=%d y=%d BACK=%d/%lu\r\n",
+            (unsigned int)state, (int)x_error, (int)y_error,
+            ROBOT_VISION_CLAW_BACKOFF_RPM, (unsigned long)ROBOT_VISION_CLAW_BACKOFF_MS);
+      break;
+    case VISION_CLAW_HOLD:
+    default:
+      break;
+  }
+  if (turn > turn_limit) turn = turn_limit;
+  else if (turn < -turn_limit) turn = -turn_limit;
+  if (forward > forward_limit) forward = forward_limit;
+  else if (forward < -forward_limit) forward = -forward_limit;
+  MissionTask_SetVisionTrackingTargets(forward, turn, wheel_limit);
+}
+
 void MissionTask_RunS3Track(uint32_t now)
 {
   int32_t absolute_x_error;
   int32_t absolute_y_error;
-  int16_t turn_rpm;
-  int16_t forward_rpm;
   bool x_in_tolerance;
   bool y_in_tolerance;
 
@@ -1204,7 +1281,8 @@ void MissionTask_RunS3Track(uint32_t now)
 
   if (!mission_ctx.mission_snapshot.vision_target_valid)
   {
-    MissionTask_StopWheels();
+    MissionTask_CommandClawApproach(now, (int16_t)ROBOT_VISION_X_MAX_TURN_RPM,
+        (int16_t)ROBOT_VISION_03_MAX_FORWARD_RPM, ROBOT_VISION_03_WHEEL_MAX_RPM);
     mission_ctx.s3_track_stable_since = 0U;
     mission_ctx.s3_wait_event04_logged = false;
     if (mission_ctx.s3_target_lost_since == 0U)
@@ -1247,16 +1325,11 @@ void MissionTask_RunS3Track(uint32_t now)
   x_in_tolerance = absolute_x_error <= ROBOT_VISION_X_TOLERANCE_PX;
   y_in_tolerance = absolute_y_error <= ROBOT_VISION_Y_TOLERANCE_PX;
 
-  /* Observe zero-error frames too, without losing the last accepted direction
-     when stopped at the center. Otherwise +/-12px crossings bypass reversal confirmation. */
-  forward_rpm = MissionTask_CalculateVisionForward(
-      now, mission_ctx.mission_snapshot.vision_y_error_px);
+  MissionTask_CommandClawApproach(now, (int16_t)ROBOT_VISION_X_MAX_TURN_RPM,
+      (int16_t)ROBOT_VISION_03_MAX_FORWARD_RPM, ROBOT_VISION_03_WHEEL_MAX_RPM);
 
   if (x_in_tolerance && y_in_tolerance)
   {
-    MissionTask_StopWheels();
-    VisionMotion_ResetAxis(&mission_ctx.vision_motion.x);
-
     if (mission_ctx.s3_track_stable_since == 0U)
     {
       mission_ctx.s3_track_stable_since = now;
@@ -1278,21 +1351,6 @@ void MissionTask_RunS3Track(uint32_t now)
   mission_ctx.s3_track_stable_since = 0U;
   mission_ctx.s3_wait_event04_logged = false;
 
-  if (x_in_tolerance)
-  {
-    turn_rpm = 0;
-    VisionMotion_ResetAxis(&mission_ctx.vision_motion.x);
-  }
-  else
-  {
-    turn_rpm = MissionTask_CalculateVisionTurn(
-        now, mission_ctx.mission_snapshot.vision_x_error_px);
-  }
-
-  mission_ctx.mission_snapshot.vision_turn_rpm = turn_rpm;
-  mission_ctx.mission_snapshot.vision_forward_rpm = forward_rpm;
-  MissionTask_SetVisionTrackingTargets(forward_rpm, turn_rpm,
-                                 ROBOT_VISION_03_WHEEL_MAX_RPM);
   MissionTask_DebugS3(now);
 }
 

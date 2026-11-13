@@ -7,6 +7,8 @@
 uint8_t MissionTask_GetSelectedObjectId(void);
 uint8_t MissionTask_GetCarriedObjectId(void);
 void MissionTask_SkipToS4FinalTrack(uint32_t now);
+bool MissionTask_PrepareS4CapturePose(uint32_t now);
+bool MissionTask_HoldS4ClawOpening(uint32_t now);
 void MissionTask_FinishS4Capture(uint32_t now);
 void MissionTask_CaptureS4From34(uint32_t now);
 void MissionTask_StartS4FinalRecovery(uint32_t now);

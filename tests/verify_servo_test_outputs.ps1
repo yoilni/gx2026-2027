@@ -139,7 +139,7 @@ int main(void) {
   assert(ROBOT_CLAW_MATERIAL_OPEN_DEG==62);
   assert(ROBOT_CLAW_MATERIAL_CAPTURE_OPEN_DEG==64U);
   assert(ROBOT_CLAW_CASUALTY_OPEN_DEG==63);
-  assert(ROBOT_CLAW_CASUALTY_CAPTURE_OPEN_DEG==68);
+  assert(ROBOT_CLAW_CASUALTY_CAPTURE_OPEN_DEG==68 && ROBOT_CLAW_ARRANGE02_OPEN_DEG==74);
   assert(!ROBOT_FRAME_DOWN_TEST_ENABLED && !ROBOT_STRAIGHT_TEST_ENABLED);
   assert(ROBOT_STRAIGHT_TEST_RPM==100 && ROBOT_STRAIGHT_TEST_MS==3000);
   reset(); assert(Actuator_Init()==HAL_OK);
@@ -172,10 +172,10 @@ int main(void) {
   assert(Actuator_SetFrameLowered()==HAL_OK);
   assert(compare[TIM_CHANNEL_3]==1607 && compare[TIM_CHANNEL_4]==closed_claw_pulse);
   assert(Actuator_SetCameraNearView()==HAL_OK && compare[TIM_CHANNEL_1]==1777); //PA5 115.
-  assert(ROBOT_CAMERA_FINAL_TRACK_ANGLE_DEG==ROBOT_CAMERA_WIDE_ANGLE_DEG);
+  assert(ROBOT_CAMERA_FINAL_TRACK_ANGLE_DEG==140U);
   assert(Actuator_SetCameraFinalTrackView()==HAL_OK && compare[TIM_CHANNEL_1]==2055); //PA5 140.
-  assert(ROBOT_CAMERA_OBJECT_TRACK_ANGLE_DEG==145U);
-  assert(Actuator_SetCameraObjectTrackView()==HAL_OK && compare[TIM_CHANNEL_1]==2111); //PA5 145.
+  assert(ROBOT_CAMERA_OBJECT_TRACK_ANGLE_DEG==140U);
+  assert(Actuator_SetCameraObjectTrackView()==HAL_OK && compare[TIM_CHANNEL_1]==2055); //PA5 140.
   assert(ROBOT_CAMERA_SAFE_ZONE_ANGLE_DEG==145U);
   assert(Actuator_SetCameraSafeZoneView()==HAL_OK && compare[TIM_CHANNEL_1]==2111); //PA5 145.
   assert(Actuator_SetCameraWideView()==HAL_OK && compare[TIM_CHANNEL_1]==2055); //PA5 140.
@@ -225,7 +225,7 @@ int main(void) {
   assert(Actuator_ServiceDeferredClawClose(1200)==HAL_OK && compare[TIM_CHANNEL_4]==950);
   assert(Actuator_SetClawAngle(ROBOT_CLAW_CASUALTY_CAPTURE_OPEN_DEG)==HAL_OK && compare[TIM_CHANNEL_4]==985);
   puts("PASS:claw deferred500ms from PA2 down,paired close cannot bypass,new open cancels auto-close,tick wrap,one-shot,cancel");
-  puts("PASS:PA5 wide/final24 140,near115;PA2 down155/up80,PA3 closed36;PA2 suspension survives paired poses until explicit resume;independent PWM and startup faults checked");
+  puts("PASS:PA5 wide140/all object tracking140/near115;PA2 down155/up80,PA3 closed36;PA2 suspension survives paired poses until explicit resume;independent PWM and startup faults checked");
 }
 '@
 $code = $prefix + "`n" +

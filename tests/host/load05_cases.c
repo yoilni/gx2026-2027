@@ -14,8 +14,10 @@ static void tick(uint32_t now) {
 static void setup(uint8_t cmd,bool after07) {
   assert(MaixCam_Init(&uart)==HAL_OK); ++uart_inits; MissionTask_ResetSupplement();
   memset(&mission_snapshot,0,sizeof(mission_snapshot));
+  memset(moto_chassis,0,sizeof(moto_chassis));
   mission_snapshot.state=MISSION_STATE_WAIT_START;
   mission_snapshot.team=ROBOT_TEAM_BLUE; mission_snapshot.yaw_cdeg=30000;
+  mission_snapshot.imu_valid=true;
   mission_snapshot.safe_zone_yaw_target_cdeg=18000;
   s7_target_switch_enabled=after07; s3_target_select_command=cmd;
   s51_active_object_id=6; s6_carried_object_id=6; s5_close_view_active=false;
@@ -23,9 +25,10 @@ static void setup(uint8_t cmd,bool after07) {
   s7_red_switch_sync_pending=false; s7_red_coordinate_fence_active=false;
   s5_recheck_resume_safe_tracking=s5_recheck_resume_supplement=false;
   s5_load_class_confirmed=true; s4_final_event34_pending=false; s4_e4_protocol_active=false;
+  s4_capture_claw_open=false;
   stops=wide_calls=track_view_calls=safe_view_calls=near_calls=frame_raise_calls=frame_partial_calls=frame_lower_calls=tx_count=0;
   final_view_calls=0;final_view_ok=true;
-  s5_casualty_adjust_active=s5_casualty_adjust_done=false;inject06_on45=false;
+  s5_casualty_adjust_active=s5_casualty_adjust_done=s5_casualty_timeout_check=false;inject06_on45=false;
   claw_close_calls=claw_open_calls=nonzero_wheel_requests=baffle_stop_calls=0;
   s6_found_baffle_pwm_active=false;
   claw_angle=ROBOT_CLAW_CLOSED_DEG;
@@ -39,6 +42,11 @@ static void setup(uint8_t cmd,bool after07) {
   inject05_result_on_tx=inject05_result_on_stop=0;
   fake_now=100; MissionTask_EnterState(MISSION_STATE_S5_WAIT_SINGLE_GREEN,100);
   MaixCam_SetSupplementWindowEnabled(after07 && cmd==0x51);
+}
+static void seed_settled_capture_claw(uint32_t at) {
+  // Precondition only for tests that start at the already-open part of24.
+  s4_capture_claw_open=true;
+  s4_capture_claw_open_tick=at-ROBOT_S4_CAPTURE_CLAW_OPEN_SETTLE_MS;
 }
 static void recovery_setup(uint8_t previous_count,bool from_tracking) {
   setup(0x51,true);
@@ -121,6 +129,8 @@ static void verify_first_recovery_forward(void) {
 }
 static void verify_prepare_reverse_without_yaw(void) {
   const int32_t errors[]={0,9000,-9000,18000};
+  const uint32_t open_ms=ROBOT_S5_ARRANGE_CLAW_OPEN_SETTLE_MS;
+  assert(open_ms==150U);
   assert(ROBOT_S5_ARRANGE_REVERSE_RPM==100 && ROBOT_S5_ARRANGE_REVERSE_MS==500U);
   for(unsigned wrap=0;wrap<2;++wrap) for(unsigned e=0;e<4;++e) {
     setup(0x51,true);
@@ -129,16 +139,20 @@ static void verify_prepare_reverse_without_yaw(void) {
     fake_now=start;rx(0x02);tick(start);
     assert(mission_snapshot.state==MISSION_STATE_S5_REVERSE_FOR_ARRANGE);
     assert(claw_open_calls==1 && claw_angle==74 && !frame_raise_calls && !frame_lower_calls);
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm && !s5_arrange_backing);
+    tick(start+open_ms-1U);
+    assert(!nonzero_wheel_requests && !tx_count);
+    tick(start+open_ms);
     assert(mission_snapshot.left_target_rpm==-100 && mission_snapshot.right_target_rpm==-100);
-    fake_now=start+400U;rx(0x02);coords(6,300,300);tick(fake_now);
-    tick(start+499U);
+    fake_now=start+open_ms+400U;rx(0x02);coords(6,300,300);tick(fake_now);
+    tick(start+open_ms+499U);
     assert(mission_snapshot.state==MISSION_STATE_S5_REVERSE_FOR_ARRANGE);
-    assert(mission_snapshot.state_entry_tick==start && claw_open_calls==1 && !tx_count);
+    assert(mission_snapshot.state_entry_tick==start+open_ms && claw_open_calls==1 && !tx_count);
     assert(mission_snapshot.left_target_rpm==-100 && mission_snapshot.right_target_rpm==-100);
     assert(mission_snapshot.vision_forward_rpm==-100 && !mission_snapshot.vision_turn_rpm);
     assert(!mission_snapshot.safe_zone_fixed_heading_active && !s6_yaw_pid.initialized);
     assert(!mission_snapshot.vision_target_valid);
-    tick(start+500U);
+    tick(start+open_ms+500U);
     assert(mission_snapshot.state==MISSION_STATE_S3_TRACK_GREEN);
     assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
     assert(!frame_lower_calls && claw_angle==36 && claw_close_calls==1 && track_view_calls==1 && !wide_calls);
@@ -149,7 +163,7 @@ static void verify_prepare_reverse_without_yaw(void) {
   for(unsigned failure=0;failure<2;++failure) {
     setup(0x51,true);claw_open_ok=failure!=0;
     fake_now=120;rx(0x02);tick(120);
-    if(failure) {claw_close_ok=false;tick(620);}
+    if(failure) {claw_close_ok=false;tick(120+open_ms);tick(620+open_ms);}
     assert(mission_snapshot.state==MISSION_STATE_FAULT && (mission_snapshot.fault_flags & MISSION_FAULT_ACTUATOR));
     assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm && !tx_count);
   }
@@ -162,16 +176,16 @@ static void verify_prepare_reverse_without_yaw(void) {
   supplement_first_request_tick=101; supplement_capture_count=1;
   fake_now=120;rx(0x02);tick(120);
   assert(supplement_capture_active && mission_snapshot.state==MISSION_STATE_S5_REVERSE_FOR_ARRANGE);
-  tick(620);
+  tick(120+open_ms);tick(620+open_ms);
   assert(mission_snapshot.state==MISSION_STATE_SUPPLEMENT_TRACK && tx_count==1 && tx_commands[0]==0x03);
   assert(supplement_capture_active && supplement_capture_count==1 && supplement_first_request_tick==101);
   // Fresh image-center frames and events arriving within TX03 survive.
   setup(0x11,true);fake_now=120;rx(0x02);tick(120);
-  inject_retry03_id=4;tick(620);
+  tick(120+open_ms);inject_retry03_id=4;tick(620+open_ms);
   MaixCam_Object object;uint8_t event;
   assert(MaixCam_GetObjectSnapshot(&object) && object.object_id==4 && object.x_error_px==15);
   assert(MaixCam_PeekEvent(&event) && event==0x04);
-  puts("PASS:05->02 claw74,reverse100/500 no yaw or baffle change,duplicate/old XY fenced,close36 then TX03,wrap/safety/supplement budget");
+  puts("PASS:05->02 claw74 holds150ms,straight reverse100/500,no baffle change,duplicate/old XY fenced,close36 then TX03,wrap/safety/supplement budget");
 }
 static void verify_recovery_forward_without_yaw(void) {
   verify_first_recovery_forward();
@@ -353,7 +367,7 @@ static void assert_review_route(uint8_t result) {
     assert(mission_snapshot.state==MISSION_STATE_S5_REVERSE_FOR_ARRANGE && claw_angle==74);
   } else {
     assert(result==0x24 && mission_snapshot.state==MISSION_STATE_S4_RAISE_FRAME);
-    assert(!final_view_calls);
+    assert(final_view_calls==1);
     assert(s6_carried_object_id==0);
     assert(!supplement_budget_started && !supplement_capture_active);
   }
@@ -774,7 +788,9 @@ static void verify_14_direct24_claw(void) {
   const uint8_t commands[]={0x21,0x31,0x11,0x51,0x51};
   const uint8_t ids[]={5,6,4,5,6};
   const uint8_t adjacent[]={0x02,0x32,0x42,0x12};
+  const uint32_t settle=ROBOT_S4_CAPTURE_CLAW_OPEN_SETTLE_MS;
   assert(ROBOT_S4_DIRECT_CAPTURE_AFTER_14==1U);
+  assert(settle==150U);
   for(unsigned c=0;c<sizeof(commands);++c) {
     setup(commands[c],c!=0);frame_lift=77; //PA2 must not move.
     supplement_first_supply_ack_sent=c!=0 && ids[c]!=4U; // Later captures retain normal05.
@@ -789,36 +805,64 @@ static void verify_14_direct24_claw(void) {
     }
     fake_now+=20;rx(0x24);tick(fake_now);
     assert(mission_snapshot.state==MISSION_STATE_S4_RAISE_FRAME && !s4_direct_capture_wait24);
-    unsigned is_casualty=ids[c]==4;
-    assert(final_view_calls==is_casualty && wide_calls==1U-is_casualty && !near_calls);
-    assert(claw_open_calls==1 && claw_angle==(ids[c]==4?68U:64U));
+    assert(final_view_calls==1 && !wide_calls && !near_calls);
+    assert(!claw_open_calls && claw_close_calls==1 && claw_angle==36);
     assert(frame_lift==77 && !frame_partial_calls && !frame_lower_calls && tx_count==1);
-    coords(ids[c],0,50);tick(fake_now); //No elapsed-time gate at all.
+    coords(ids[c],0,100);tick(fake_now);
     assert(mission_snapshot.state==MISSION_STATE_S4_TRACK_FINAL_BLOCK && mission_snapshot.vision_target_valid);
-    tick(fake_now+20U);assert(nonzero_wheel_requests && claw_open_calls==1 && !claw_close_calls);
-    assert(final_view_calls==is_casualty && wide_calls==1U-is_casualty && !near_calls);
+    tick(fake_now+20U);
+    assert(nonzero_wheel_requests && !claw_open_calls && claw_close_calls==1);
+    fake_now+=20U;coords(ids[c],0,65);tick(fake_now);
+    assert(mission_snapshot.vision_forward_rpm>0 && !claw_open_calls);
+    fake_now+=20U;coords(ids[c]|0xC0,16,60);tick(fake_now);
+    assert(!claw_open_calls && !s4_capture_claw_open);
+    assert(!mission_snapshot.vision_forward_rpm && mission_snapshot.vision_turn_rpm);
+    // A small box and the legacy unqualified event cannot open the claw.
+    fake_now+=20U;coords(ids[c]|0xC0,0,60);rx_wire(0x34);tick(fake_now);
+    assert(!claw_open_calls && mission_snapshot.target_id==ids[c]);
+    // A centered large box is sufficient even if Y looks far, but it must
+    // actually brake before commanding the servo.
+    fake_now+=20U;moto_chassis[MISSION_LEFT_MOTOR_INDEX].speed_rpm=400;
+    coords(ids[c]|0xE0,15,150);tick(fake_now);
+    assert(!claw_open_calls && !mission_snapshot.vision_forward_rpm);
+    moto_chassis[MISSION_LEFT_MOTOR_INDEX].speed_rpm=0;
+    uint32_t opened=fake_now+20U;
+    fake_now=opened;coords(ids[c]|0xE0,15,150);tick(opened);
+    assert(claw_open_calls==1 && claw_angle==(ids[c]==4?68U:64U) && s4_capture_claw_open);
+    assert(final_view_calls==2 && !wide_calls && !near_calls);
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
+    tick(opened+settle-1U);
+    assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm && claw_open_calls==1);
+    fake_now=opened+settle;coords(ids[c]|0xE0,0,50);tick(fake_now);
+    assert(mission_snapshot.left_target_rpm>0 && mission_snapshot.right_target_rpm>0);
     unsigned moves=nonzero_wheel_requests;
     fake_now+=20U;rx(0x34);tick(fake_now);
-    assert(mission_snapshot.state==MISSION_STATE_S4_FINAL_TURN_SAFE && claw_close_calls==1);
+    assert(mission_snapshot.state==MISSION_STATE_S4_FINAL_TURN_SAFE && claw_close_calls==2);
     assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm && nonzero_wheel_requests==moves);
     (void)finish_34_safe_turn(fake_now+20U);
     assert(mission_snapshot.state==MISSION_STATE_S5_WAIT_SINGLE_GREEN && tx_count==2 && tx_commands[1]==0x25);
-    assert(claw_close_calls==1 && claw_angle==ROBOT_CLAW_CLOSED_DEG && frame_lift==77);
+    assert(claw_close_calls==2 && claw_angle==ROBOT_CLAW_CLOSED_DEG && frame_lift==77);
     assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
   }
   //24 arriving during the14 ACK and34 before the next dispatch both survive.
   setup(0x11,true);MissionTask_EnterState(MISSION_STATE_S4_TRACK_CENTER,100);
   inject_push_reply_on_tx=0x24;fake_now=120;rx(0x14);tick(120);tick(140);
-  assert(claw_open_calls==1 && claw_angle==68 && tx_count==1);
+  assert(!claw_open_calls && claw_close_calls==1 && claw_angle==36 && tx_count==1);
   fake_now=140;rx(0x34);tick(140);
-  assert(mission_snapshot.state==MISSION_STATE_S4_FINAL_TURN_SAFE && claw_close_calls==1);
+  assert(mission_snapshot.state==MISSION_STATE_S4_FINAL_CENTER_OBJECT && claw_close_calls==1);
+  assert(claw_open_calls==1 && claw_angle==68 && !nonzero_wheel_requests);
+  fake_now=160;rx(0x34);tick(160);
+  tick(140+settle-1U);
+  assert(mission_snapshot.state==MISSION_STATE_S4_FINAL_CENTER_OBJECT && claw_open_calls==1);
+  tick(140+settle);
+  assert(mission_snapshot.state==MISSION_STATE_S4_FINAL_TURN_SAFE && claw_close_calls==2);
   (void)finish_34_safe_turn(fake_now+20U);
   assert(mission_snapshot.state==MISSION_STATE_S5_WAIT_SINGLE_GREEN && claw_angle==ROBOT_CLAW_CLOSED_DEG);
   assert(tx_count==2 && tx_commands[1]==0x25 && !nonzero_wheel_requests);
-  //Direct black31 stays wide before sending31/24.
+  //Direct black31 takes the same lower view before sending31/24.
   setup(0x51,true);frame_lift=77;MissionTask_StartBlackFinalTrack(120);
-  assert(claw_open_calls==1 && claw_angle==64U && frame_lift==77);
-  assert(!final_view_calls && wide_calls==1 && !near_calls);
+  assert(!claw_open_calls && claw_angle==36U && frame_lift==77);
+  assert(final_view_calls==1 && !wide_calls && !near_calls);
   assert(tx_count==1 && tx_commands[0]==0x31 && !frame_partial_calls);
   tick(120);assert(mission_snapshot.state==MISSION_STATE_S4_TRACK_FINAL_BLOCK);
   assert(tx_count==2 && tx_commands[1]==0x24);
@@ -826,17 +870,24 @@ static void verify_14_direct24_claw(void) {
   unsigned wide_before=wide_calls;
   fake_now+=20;rx(0x24);tick(fake_now);
   assert(mission_snapshot.state==MISSION_STATE_S4_RAISE_FRAME && supplement_capture_active);
-  assert(!final_view_calls && wide_calls==wide_before+1 && claw_angle==64U);
+  assert(final_view_calls==1 && wide_calls==wide_before && claw_angle==36U && !claw_open_calls);
   tick(fake_now+20U);
   assert(mission_snapshot.state==MISSION_STATE_S4_TRACK_FINAL_BLOCK && supplement_capture_active);
-  assert(!final_view_calls && wide_calls==wide_before+1);
+  assert(final_view_calls==1 && wide_calls==wide_before);
   setup(0x11,true);claw_open_ok=false;fake_now=120;rx(0x24);tick(120);
+  tick(140);fake_now=160;coords(0xE4,0,30);tick(160);
   assert(mission_snapshot.state==MISSION_STATE_FAULT && (mission_snapshot.fault_flags&MISSION_FAULT_ACTUATOR));
   assert(!nonzero_wheel_requests && !tx_count && claw_open_calls==1);
   setup(0x11,true);final_view_ok=false;fake_now=120;rx(0x24);tick(120);
   assert(mission_snapshot.state==MISSION_STATE_FAULT && (mission_snapshot.fault_flags&MISSION_FAULT_ACTUATOR));
   assert(final_view_calls==1 && !claw_open_calls && !nonzero_wheel_requests && !tx_count);
-  puts("PASS:14 waits24/E4;24 material and supplement stay wide,casualty uses capture view,opens PA3 by class,keeps new XY/early34;34 stops/closes;black direct31/24 and actuator faults checked");
+  setup(0x21,false);MissionTask_EnterState(MISSION_STATE_S4_TRACK_FINAL_BLOCK,100);
+  fake_now=120;coords(0xE5,0,60);
+  tick(120+ROBOT_VISION_COORD_DECEL_START_MS+1U);
+  assert(mission_snapshot.vision_target_valid && !claw_open_calls && !nonzero_wheel_requests);
+  fake_now+=20U;coords(0xE5,0,60);tick(fake_now);
+  assert(claw_open_calls==1 && s4_capture_claw_open);
+  puts("PASS:14 waits24/E4; all24 starts closed at140; fresh aligned area opens68/64 after braking, holds150 then drives; qualified capture opens and waits before closing; legacy34 rejected; direct31/supplement and actuator faults");
 }
 
 static uint32_t finish_24_timeout_backoff(uint32_t start) {
@@ -857,8 +908,8 @@ static uint32_t finish_24_timeout_backoff(uint32_t start) {
 static void verify_24_timeout_retry03(void) {
   assert(ROBOT_S4_FINAL_TRACK_RETRY_MS==1000U);
   assert(ROBOT_S4_FINAL_TIMEOUT_BACKOFF_RPM==100 && ROBOT_S4_FINAL_TIMEOUT_BACKOFF_MS==400U);
-  const uint8_t targets[]={0x21,0x11,0x31,0x51};
-  const uint8_t ids[]={5,4,6,6};
+  const uint8_t targets[]={0x21,0x31,0x51};
+  const uint8_t ids[]={5,6,6};
   for(unsigned i=0;i<sizeof(targets);++i) for(unsigned wrap=0;wrap<3;++wrap) {
     setup(targets[i],i!=0);s4_green_e4_push_cycles=2;
     uint32_t start=wrap==1?UINT32_MAX-500U:wrap==2?UINT32_MAX-1100U:500U;
@@ -868,17 +919,17 @@ static void verify_24_timeout_retry03(void) {
     assert(mission_snapshot.state==MISSION_STATE_S4_TRACK_FINAL_BLOCK && !tx_count);
     //The previous ROI coordinate must not survive the timeout.
     fake_now=deadline;tick(deadline);
-    bool backoff=targets[i]!=0x11;
-    uint32_t restarted=backoff?finish_24_timeout_backoff(deadline):deadline;
+    uint32_t restarted=finish_24_timeout_backoff(deadline);
     assert(mission_snapshot.state==MISSION_STATE_S3_TRACK_GREEN && mission_snapshot.state_entry_tick==restarted);
     assert(tx_count==1 && tx_commands[0]==0x03 && s3_target_select_command==targets[i]);
-    assert(frame_lower_calls==(backoff?2U:1U) && claw_angle==ROBOT_CLAW_CLOSED_DEG && track_view_calls==1 && !wide_calls);
+    assert(frame_lower_calls==2 && claw_angle==ROBOT_CLAW_CLOSED_DEG && track_view_calls==1 && !wide_calls);
     assert(!mission_snapshot.vision_target_valid && !mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
     assert(!mission_snapshot.fault_flags && s4_green_e4_push_cycles==2);
     MissionTask_UpdateVisionInput(restarted+20U);assert(!mission_snapshot.vision_target_valid);
   }
   setup(0x21,false);MissionTask_EnterState(MISSION_STATE_S4_TRACK_FINAL_BLOCK,120);
   const uint32_t retry_tick=120U+ROBOT_S4_FINAL_TRACK_RETRY_MS;
+  seed_settled_capture_claw(retry_tick);
   fake_now=retry_tick;rx(0x34);tick(fake_now);
   assert(mission_snapshot.state==MISSION_STATE_S4_FINAL_TURN_SAFE && !tx_count && !nonzero_wheel_requests);
 
@@ -890,7 +941,7 @@ static void verify_24_timeout_retry03(void) {
   assert(mission_snapshot.vision_target_valid && mission_snapshot.vision_y_error_px==-95);
   assert(MaixCam_TakeEvent(&event) && event==0x04 && tx_count==1);
   MissionTask_StartS4TrackCenterFrom04(fake_now+20U);
-  assert(mission_snapshot.state==MISSION_STATE_S4_TRACK_CENTER && track_view_calls==1 && wide_calls==1);
+  assert(mission_snapshot.state==MISSION_STATE_S4_TRACK_CENTER && track_view_calls==2 && !wide_calls);
   assert(tx_count==2 && tx_commands[1]==0x04);
 
   for(unsigned expiry=0;expiry<2;++expiry) {
@@ -948,7 +999,7 @@ static void verify_24_timeout_retry03(void) {
     if(mode==0) assert(tx_count==sent+1 && tx_commands[sent]==0x05);
     else assert(tx_count==sent);
   }
-  puts("PASS:24 999/1000: supply closes and backs at 100rpm for400ms then TX03; red direct03; wrap,old ROI/loss fenced,new XY/04 retained,34 priority,budget and faults");
+  puts("PASS:24 999/1000: supply closes and backs at 100rpm for400ms then TX03; wrap,old ROI/loss fenced,new XY/04 retained,34 priority,budget and faults");
 }
 static void verify_exit_supplement_then_red_e3(void) {
   for(unsigned route=0;route<2;++route) {
@@ -966,7 +1017,8 @@ static void verify_exit_supplement_then_red_e3(void) {
     tick(review);
     if(route) {
       assert(mission_snapshot.state==MISSION_STATE_S5_REVERSE_FOR_ARRANGE && supplement_budget_started);
-      tick(review+ROBOT_S5_ARRANGE_REVERSE_MS);
+      tick(review+ROBOT_S5_ARRANGE_CLAW_OPEN_SETTLE_MS);
+      tick(review+ROBOT_S5_ARRANGE_CLAW_OPEN_SETTLE_MS+ROBOT_S5_ARRANGE_REVERSE_MS);
     } else {
       assert(mission_snapshot.state==MISSION_STATE_S4_RAISE_FRAME && s6_carried_object_id==0);
       assert(!supplement_budget_started && !supplement_capture_active);
@@ -1030,6 +1082,7 @@ static void verify_34_claw_and_review(void) {
       uint32_t start=wrap?UINT32_MAX-10U:100U;
       mission_snapshot.team=red?ROBOT_TEAM_RED:ROBOT_TEAM_BLUE;
       MissionTask_EnterState(MISSION_STATE_S4_TRACK_FINAL_BLOCK,start);
+      seed_settled_capture_claw(start);
       claw_angle=ids[c]==4?ROBOT_CLAW_CASUALTY_CAPTURE_OPEN_DEG:ROBOT_CLAW_MATERIAL_CAPTURE_OPEN_DEG;
       mission_snapshot.left_target_rpm=80;mission_snapshot.right_target_rpm=60;
       fake_now=start;coords(ids[c],5,30);rx(0x34);tick(start);
@@ -1056,14 +1109,18 @@ static void verify_34_claw_and_review(void) {
   //Already-in24 early34 and EE recovery stop and close without advancing.
   setup(0x21,false);s4_final_mode_already_active=true;
   MissionTask_EnterState(MISSION_STATE_S4_RAISE_FRAME,100);fake_now=120;rx(0x34);tick(120);
+  assert(mission_snapshot.state==MISSION_STATE_S4_FINAL_CENTER_OBJECT && claw_open_calls==1);
+  tick(120+ROBOT_S4_CAPTURE_CLAW_OPEN_SETTLE_MS);
   assert(mission_snapshot.state==MISSION_STATE_S4_FINAL_TURN_SAFE && claw_close_calls==1);
-  (void)finish_34_safe_turn(140);
+  (void)finish_34_safe_turn(fake_now+20U);
   assert(mission_snapshot.state==MISSION_STATE_S5_WAIT_SINGLE_GREEN && claw_close_calls==1);
   assert(tx_count==1 && tx_commands[0]==0x25 && !nonzero_wheel_requests && !frame_lower_calls);
   setup(0x21,false);MissionTask_EnterState(MISSION_STATE_S4_FINAL_RECOVERY_REVERSE,100);
   fake_now=120;rx(0x34);assert(MissionTask_TryResumeS4FinalRecovery(120));
+  assert(mission_snapshot.state==MISSION_STATE_S4_FINAL_CENTER_OBJECT && claw_open_calls==1);
+  tick(120+ROBOT_S4_CAPTURE_CLAW_OPEN_SETTLE_MS);
   assert(mission_snapshot.state==MISSION_STATE_S4_FINAL_TURN_SAFE && claw_close_calls==1);
-  (void)finish_34_safe_turn(140);
+  (void)finish_34_safe_turn(fake_now+20U);
   assert(mission_snapshot.state==MISSION_STATE_S5_WAIT_SINGLE_GREEN && claw_close_calls==1);
   assert(tx_count==1 && tx_commands[0]==0x25 && !nonzero_wheel_requests && !frame_lower_calls);
   //Direct supplementary34 enters the same05 handshake without resetting its budget.
@@ -1071,8 +1128,10 @@ static void verify_34_claw_and_review(void) {
   unsigned sent=tx_count, lower=frame_lower_calls, moves=nonzero_wheel_requests;
   uint32_t first=supplement_first_request_tick;uint8_t count=supplement_capture_count;
   fake_now+=20U;coords(6,0,20);rx(0x34);tick(fake_now);
+  assert(mission_snapshot.state==MISSION_STATE_S4_FINAL_CENTER_OBJECT && claw_open_calls==1);
+  tick(fake_now+ROBOT_S4_CAPTURE_CLAW_OPEN_SETTLE_MS);
   assert(mission_snapshot.state==MISSION_STATE_S4_FINAL_TURN_SAFE && claw_angle==ROBOT_CLAW_CLOSED_DEG && claw_close_calls==1);
-  assert(!claw_open_calls && tx_count==sent && nonzero_wheel_requests==moves);
+  assert(claw_open_calls==1 && tx_count==sent && nonzero_wheel_requests==moves);
   (void)finish_34_safe_turn(fake_now+20U);
   assert(mission_snapshot.state==MISSION_STATE_S5_WAIT_SINGLE_GREEN && claw_close_calls==1);
   assert(tx_count==sent+1 && tx_commands[sent]==0x25);
@@ -1081,6 +1140,7 @@ static void verify_34_claw_and_review(void) {
   const uint32_t capture_tick=120U;
   for(unsigned failed_tx=0;failed_tx<2;++failed_tx) {
     setup(0x11,true);MissionTask_EnterState(MISSION_STATE_S4_TRACK_FINAL_BLOCK,100);
+    seed_settled_capture_claw(capture_tick);
     claw_close_ok=failed_tx!=0;tx_ok=failed_tx==0;
     fake_now=120;rx(0x34);tick(120);
     if(failed_tx) (void)finish_34_safe_turn(capture_tick+20U);
@@ -1091,6 +1151,7 @@ static void verify_34_claw_and_review(void) {
   }
   for(unsigned review=0;review<2;++review) {
     setup(0x21,false);MissionTask_EnterState(MISSION_STATE_S4_TRACK_FINAL_BLOCK,100);
+    seed_settled_capture_claw(120);
     claw_close_inhibited=1;
     fake_now=120;rx(0x34);tick(120);
     if(review) { fake_now=140;rx(0x05); }
@@ -1102,6 +1163,7 @@ static void verify_34_claw_and_review(void) {
     tick(160);assert(!nonzero_wheel_requests && !tx_count);
   }
   setup(0x11,true);MissionTask_EnterState(MISSION_STATE_S4_TRACK_FINAL_BLOCK,100);
+  seed_settled_capture_claw(120);
   claw_close_inhibited=1;
   fake_now=120;rx(0x34);tick(120);tick(240);
   assert(mission_snapshot.state==MISSION_STATE_S4_FINAL_CENTER_OBJECT);
@@ -1112,6 +1174,7 @@ static void verify_34_claw_and_review(void) {
 
   for(unsigned result=0;result<3;++result) {
     setup(0x11,true);MissionTask_EnterState(MISSION_STATE_S4_TRACK_FINAL_BLOCK,100);
+    seed_settled_capture_claw(capture_tick);
     mission_snapshot.safe_zone_yaw_target_cdeg=35000;
     mission_snapshot.yaw_cdeg=8000; // -90 degree shortest turn across the wrap.
     fake_now=120;rx(0x34);tick(120);
@@ -1145,6 +1208,7 @@ static void verify_first_supply_capture_auto_supplement(void) {
     uint32_t captured=i==4?UINT32_MAX-200U:120U;
     mission_snapshot.team=(i&1)?ROBOT_TEAM_RED:ROBOT_TEAM_BLUE;
     MissionTask_EnterState(MISSION_STATE_S4_TRACK_FINAL_BLOCK,captured-20U);
+    seed_settled_capture_claw(captured);
     claw_angle=ROBOT_CLAW_MATERIAL_CAPTURE_OPEN_DEG;
     first34_ack_delay_ms=37U;
     fake_now=captured;
@@ -1173,10 +1237,12 @@ static void verify_first_supply_capture_auto_supplement(void) {
     fake_now=ready+270U;rx(0x24);tick(fake_now);
     assert(mission_snapshot.state==MISSION_STATE_S4_RAISE_FRAME);
     tick(ready+290U);
-    assert(mission_snapshot.state==MISSION_STATE_S4_TRACK_FINAL_BLOCK && claw_open_calls==1);
+    assert(mission_snapshot.state==MISSION_STATE_S4_TRACK_FINAL_BLOCK && !claw_open_calls && claw_close_calls==2);
     fake_now=ready+310U;coords(next_id,0,10);rx(0x34);tick(fake_now);
-    assert(mission_snapshot.state==MISSION_STATE_S4_FINAL_TURN_SAFE && claw_close_calls==2 && tx_count==3);
-    uint32_t reviewed=finish_34_safe_turn(ready+330U);
+    assert(mission_snapshot.state==MISSION_STATE_S4_FINAL_CENTER_OBJECT && claw_open_calls==1);
+    tick(fake_now+ROBOT_S4_CAPTURE_CLAW_OPEN_SETTLE_MS);
+    assert(mission_snapshot.state==MISSION_STATE_S4_FINAL_TURN_SAFE && claw_close_calls==3 && tx_count==3);
+    uint32_t reviewed=finish_34_safe_turn(fake_now+20U);
     assert(mission_snapshot.state==MISSION_STATE_S5_WAIT_SINGLE_GREEN);
     assert(tx_count==4 && tx_commands[3]==((i&1)?0x15:0x25));
     assert(supplement_capture_count==1 && supplement_first_request_tick==captured && !supplement_capture_active);
@@ -1187,6 +1253,7 @@ static void verify_first_supply_capture_auto_supplement(void) {
   }
   // Deferred claw close must not ACK or start the budget early.
   setup(0x31,true);MissionTask_EnterState(MISSION_STATE_S4_TRACK_FINAL_BLOCK,100);
+  seed_settled_capture_claw(120);
   claw_close_inhibited=1;fake_now=120;rx(0x34);tick(120);tick(140);
   assert(mission_snapshot.state==MISSION_STATE_S4_FINAL_CENTER_OBJECT && !tx_count && !supplement_budget_started);
   claw_close_inhibited=0;tick(160);
@@ -1201,6 +1268,7 @@ static void verify_first_supply_capture_auto_supplement(void) {
 
   for(unsigned failure=0;failure<3;++failure) {
     setup(0x51,true);MissionTask_EnterState(MISSION_STATE_S4_TRACK_FINAL_BLOCK,100);
+    seed_settled_capture_claw(120);
     claw_close_ok=failure!=0;tx_ok=failure!=1;wide_ok=failure!=2;
     fake_now=120;rx(0x34);tick(120);
     assert(mission_snapshot.state==MISSION_STATE_FAULT && !nonzero_wheel_requests);
@@ -1214,6 +1282,7 @@ static uint32_t start_casualty_regrip(unsigned mode, bool wrap) {
   setup(mode==4?0x21:0x11,mode!=4);
   uint32_t start=wrap?UINT32_MAX-400U:120U;
   MissionTask_EnterState(MISSION_STATE_S4_TRACK_FINAL_BLOCK,start);
+  seed_settled_capture_claw(start);
   fake_now=start;
   if(mode==3) rx(0x54); //Out of order: it must not pair with a later34.
   rx(0x34);
@@ -1268,6 +1337,7 @@ static void verify_54_casualty_regrip(void) {
     assert(!mission_snapshot.left_target_rpm && !mission_snapshot.right_target_rpm);
   }
   setup(0x11,true);MissionTask_EnterState(MISSION_STATE_S4_TRACK_FINAL_BLOCK,100);
+  seed_settled_capture_claw(120);
   fake_now=120;rx(0x34);rx(0x54);tick(120);
   tick(120U+ROBOT_HEADING_TURN_TIMEOUT_MS);
   assert(mission_snapshot.state==MISSION_STATE_S5_WAIT_SINGLE_GREEN && !claw_open_calls && tx_count==1);
@@ -1355,11 +1425,67 @@ static void verify_05_stops_before_counting(void) {
   puts("PASS:ordinary05 stops before15/25,keeps zero targets while waiting,and stops before near view");
 }
 
+static void verify_red_timeout_inventory(void) {
+  const uint32_t start=500U, deadline=start+ROBOT_S4_FINAL_TRACK_RETRY_MS;
+  for(unsigned branch=0;branch<3;++branch) {
+    setup(0x11,true);
+    if(branch==0) mission_snapshot.team=ROBOT_TEAM_RED;
+    MissionTask_EnterState(MISSION_STATE_S4_TRACK_FINAL_BLOCK,start);
+    claw_angle=ROBOT_CLAW_CASUALTY_CAPTURE_OPEN_DEG;
+    if(branch==0) claw_close_inhibited=1;
+    tick(deadline);
+    if(branch==0) {
+      assert(mission_snapshot.state==MISSION_STATE_S4_FINAL_CENTER_OBJECT);
+      assert(s5_casualty_timeout_check && !tx_count && !claw_close_calls);
+      claw_close_inhibited=0;
+      tick(deadline+1U);
+    }
+    assert(mission_snapshot.state==MISSION_STATE_S5_WAIT_SINGLE_GREEN && s5_casualty_timeout_check);
+    assert(!s5_load_class_confirmed && !s6_carried_object_id);
+    assert(claw_close_calls==1 && claw_angle==ROBOT_CLAW_CLOSED_DEG);
+    assert(tx_count==1 && tx_commands[0]==(branch==0?0x15:0x25));
+    assert(!near_calls && !nonzero_wheel_requests && !mission_snapshot.vision_target_valid);
+
+    fake_now=deadline+30U;rx(0x24);tick(fake_now);
+    assert(mission_snapshot.state==MISSION_STATE_S5_WAIT_SINGLE_GREEN && tx_count==1);
+    fake_now=deadline+50U;rx(0x05);tick(fake_now);
+    assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT && near_calls==1);
+    assert(s5_casualty_timeout_check && !nonzero_wheel_requests);
+    uint32_t ready=deadline+50U+ROBOT_S6_RECHECK_CAMERA_SETTLE_MS;
+    if(branch==0) {
+      fake_now=ready;rx(0x24);tick(ready);
+      assert(mission_snapshot.state==MISSION_STATE_S5_CASUALTY_EMPTY_WIDE_SETTLE);
+      assert(!s5_casualty_timeout_check && track_view_calls==1 && tx_count==1);
+      assert(!claw_open_calls && !nonzero_wheel_requests);
+      tick(ready+ROBOT_S5_CASUALTY_EMPTY_WIDE_SETTLE_MS-1U);
+      assert(tx_count==1 && mission_snapshot.state==MISSION_STATE_S5_CASUALTY_EMPTY_WIDE_SETTLE);
+      tick(ready+ROBOT_S5_CASUALTY_EMPTY_WIDE_SETTLE_MS);
+      assert(mission_snapshot.state==MISSION_STATE_S3_TRACK_GREEN && tx_count==2 && tx_commands[1]==0x03);
+      assert(!nonzero_wheel_requests && s3_target_select_command==0x11);
+    } else {
+      final_report(branch==1?4:5,ready);
+      if(branch==1) {
+        assert(mission_snapshot.state==MISSION_STATE_S6_SEARCH_SAFE_ZONE);
+        assert(s6_carried_object_id==4 && s5_load_class_confirmed && !s5_casualty_timeout_check);
+      } else {
+        assert(mission_snapshot.state==MISSION_STATE_S6_RECHECK_WAIT_RESULT);
+        assert(!s5_load_class_confirmed && s5_casualty_timeout_check && !nonzero_wheel_requests);
+      }
+    }
+  }
+  setup(0x11,true);
+  MissionTask_EnterState(MISSION_STATE_S4_TRACK_FINAL_BLOCK,start);
+  claw_close_ok=false;tick(deadline);
+  assert(mission_snapshot.state==MISSION_STATE_FAULT && !tx_count && !s5_casualty_timeout_check);
+  puts("PASS:red24 timeout closes without turning, then15/25 +05; fresh ID4+06 transfers, empty24 settles wide then03, non-red ID blocked");
+}
+
 int main(void) {
   verify_start_zone_avoidance();
   verify_fine_arrange_integration();
   verify_14_direct24_claw();
   verify_24_timeout_retry03();
+  verify_red_timeout_inventory();
   verify_exit_supplement_then_red_e3();
   verify_34_claw_and_review();
   verify_first_supply_capture_auto_supplement();
@@ -1368,6 +1494,7 @@ int main(void) {
   verify_05_stops_before_counting();
   assert(ROBOT_S6_RECHECK_CAMERA_SETTLE_MS==300U);
   verify_vision_approach();
+  verify_claw_tracking_motion_order();
   verify_prepare_reverse_without_yaw();
   verify_recovery_forward_without_yaw();
   verify_recovery_forward_lock();
@@ -1488,7 +1615,7 @@ int main(void) {
     tick(120U+ROBOT_S6_RECHECK_CAMERA_SETTLE_MS);
     assert(mission_snapshot.state==(result?MISSION_STATE_S4_RAISE_FRAME:MISSION_STATE_S5_REVERSE_FOR_ARRANGE));
     assert(!maixcam_load_recheck_enabled && tx_count==0);
-    assert(wide_calls==result && !final_view_calls);
+    assert(!wide_calls && final_view_calls==result);
   }
   // Post-capture04/24 review can still continue the same attempt with the
   // original budget clock. Only the03-entry recount is removed.

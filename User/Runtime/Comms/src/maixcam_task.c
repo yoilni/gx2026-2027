@@ -164,6 +164,11 @@ static void MaixCam_PublishFrame(void)
                  maixcam_frame_buffer[7]);
   uint8_t x_sign = maixcam_frame_buffer[5];
   uint8_t y_sign = maixcam_frame_buffer[8];
+  const uint8_t wire_id = maixcam_frame_buffer[2];
+  const bool geometry_present = (wire_id & MAIXCAM_OBJECT_GEOMETRY_PRESENT) != 0U;
+  const uint8_t object_id = geometry_present ? wire_id & MAIXCAM_OBJECT_GEOMETRY_ID_MASK : wire_id;
+  if (geometry_present && (object_id < 3U || object_id > 6U || (wire_id & 0x10U) != 0U))
+    return;
 
   if (((x_sign != MAIXCAM_SIGN_POSITIVE) &&
        (x_sign != MAIXCAM_SIGN_NEGATIVE)) ||
@@ -206,11 +211,14 @@ static void MaixCam_PublishFrame(void)
        Outside counting only zero-error ID5 is reserved as before. */
     return;
   }
+  if (maixcam_supplement_window_enabled != 0U && maixcam_supplement_load_check_enabled != 0U)
+    return; /* Tagged steering frames are not inventory reports. */
 
   /* Load reports above remain usable if a safety05 interrupts46. */
   if (maixcam_bar_shift_active != 0U || maixcam_start_avoidance_active != 0U ||
       maixcam_supplement_e3_turn_active != 0U) return;
-  maixcam_object.object_id = maixcam_frame_buffer[2];
+  maixcam_object.object_id = object_id;
+  maixcam_object.geometry = geometry_present ? wire_id & 0xE0U : 0U;
   maixcam_object.x_error_px =
       x_sign == MAIXCAM_SIGN_POSITIVE
           ? (int16_t)x_magnitude
@@ -323,6 +331,17 @@ static void MaixCam_ProcessByte(uint8_t byte)
       break;
 
     case MAIXCAM_WAIT_EVENT_TAIL_2:
+      if (byte == MAIXCAM_FRAME_TAIL_2)
+      {
+        if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_FINAL_OBJECT_IN_FRAME)
+        {
+          /* Legacy 34 can assert ROI entry without verifying the claw gate. */
+          MaixCam_ResetParser(byte);
+          break;
+        }
+        if (maixcam_frame_buffer[2] == MAIXCAM_EVENT_GEOMETRY_CAPTURE)
+          maixcam_frame_buffer[2] = MAIXCAM_EVENT_FINAL_OBJECT_IN_FRAME;
+      }
       if ((byte == MAIXCAM_FRAME_TAIL_2) &&
           !(maixcam_discard_search_reference_frame != 0U &&
             MaixCam_IsStartAvoidanceMotionEvent(maixcam_frame_buffer[2])) &&

@@ -197,6 +197,28 @@
    means the selected target is above the collection-frame reference point;
    the -1 sign converts that error into positive (forward) wheel speed. */
 #define ROBOT_VISION_Y_TOLERANCE_PX           12
+/* Claw approach: use XY tracking until the near-align threshold. The smaller
+   contact limits require straight backoff if not aligned. All Y values are
+   signed remaining distances to each phase's reference, not image rows. */
+#define ROBOT_VISION_CLAW_REALIGN_X_PX          20
+#define ROBOT_VISION_CLAW_ALIGN_03_PX           65
+#define ROBOT_VISION_CLAW_ALIGN_04_PX           50
+#define ROBOT_VISION_CLAW_ALIGN_24_PX           70
+#define ROBOT_VISION_CLAW_NEAR_03_PX            30
+#define ROBOT_VISION_CLAW_NEAR_04_PX            20
+#define ROBOT_VISION_CLAW_NEAR_24_PX            40
+#define ROBOT_VISION_CLAW_REARM_MARGIN_PX       15
+#define ROBOT_VISION_CLAW_BACKOFF_RPM           60
+#define ROBOT_VISION_CLAW_AREA_APPROACH_MAX_RPM  60
+#define ROBOT_VISION_CLAW_BACKOFF_MS            200U
+#define ROBOT_VISION_CLAW_STOP_MOTOR_RPM        288 /* 8 wheel RPM × 36. */
+/* Dedicated heading PID for the final straight approach, not safety-zone PID. */
+#define ROBOT_VISION_CLAW_YAW_KP              0.025f
+#define ROBOT_VISION_CLAW_YAW_KI              0.0001f
+#define ROBOT_VISION_CLAW_YAW_KD              0.0006f
+#define ROBOT_VISION_CLAW_YAW_I_LIMIT         3000.0f
+#define ROBOT_VISION_CLAW_YAW_DEADBAND_CDEG      80L
+#define ROBOT_VISION_CLAW_YAW_MAX_RPM             15
 #define ROBOT_VISION_Y_STABLE_MS             300U
 #define ROBOT_VISION_Y_KP                    0.40f
 #define ROBOT_VISION_Y_KI                    0.00f
@@ -293,6 +315,10 @@
 #define ROBOT_S4_FINE42_WHEEL_MAX_RPM               170
 #define ROBOT_S4_TRACK_TIMEOUT_MS                15000U
 #define ROBOT_S4_FINAL_TRACK_RETRY_MS              1000U
+/* 24 starts closed; open only on a fresh aligned near target or on RX34. */
+#define ROBOT_S4_CAPTURE_CLAW_OPEN_SETTLE_MS       150U
+/* Red timeout empty05: cover MaixCAM's 300ms wide-view pause before TX03. */
+#define ROBOT_S5_CASUALTY_EMPTY_WIDE_SETTLE_MS       350U
 #define ROBOT_S4_FINAL_TIMEOUT_BACKOFF_RPM          100
 #define ROBOT_S4_FINAL_TIMEOUT_BACKOFF_MS           400U
 #define ROBOT_S4_CASUALTY_REGRIP_RPM                  70
@@ -404,6 +430,7 @@
 /* RX02 during05: open the claw and back up without steering or moving the baffle. */
 #define ROBOT_S5_ARRANGE_REVERSE_RPM              100
 #define ROBOT_S5_ARRANGE_REVERSE_MS               500U
+#define ROBOT_S5_ARRANGE_CLAW_OPEN_SETTLE_MS      150U
 
 /* After event 06, turn by the shortest JY901S path toward the known field
    heading of the selected safe zone while waiting for MaixCam event 16. */
@@ -664,7 +691,7 @@
 /*24 capture angles, separate from the departure/regrip/unloading poses. */
 #define ROBOT_CLAW_MATERIAL_CAPTURE_OPEN_DEG 64U
 #define ROBOT_CLAW_CASUALTY_CAPTURE_OPEN_DEG 68U
-#define ROBOT_CLAW_ARRANGE02_OPEN_DEG (ROBOT_CLAW_CASUALTY_CAPTURE_OPEN_DEG + 6U)
+#define ROBOT_CLAW_ARRANGE02_OPEN_DEG       74U
 #define ROBOT_CLAW_CASUALTY_ADJUST_OPEN_DEG (ROBOT_CLAW_MATERIAL_OPEN_DEG - 3U)
 
 /* Legacy bench-only mirrored frame endpoints; PA2/PA3 still use the
@@ -680,9 +707,10 @@
 /* PA5/TIM2 CH1 MG90S: use the calibrated 140-degree wide view on boot
    and when returning to the wide search view. */
 #define ROBOT_CAMERA_WIDE_ANGLE_DEG      140U
-#define ROBOT_CAMERA_OBJECT_TRACK_ANGLE_DEG 145U
+#define ROBOT_CAMERA_OBJECT_TRACK_ANGLE_DEG 140U
 #define ROBOT_CAMERA_SAFE_ZONE_ANGLE_DEG 145U
-#define ROBOT_CAMERA_FINAL_TRACK_ANGLE_DEG ROBOT_CAMERA_WIDE_ANGLE_DEG
+/* 03, 04 and 24 share one physical tracking view. */
+#define ROBOT_CAMERA_FINAL_TRACK_ANGLE_DEG ROBOT_CAMERA_OBJECT_TRACK_ANGLE_DEG
 #define ROBOT_CAMERA_NEAR_ANGLE_DEG      115U
 #define ROBOT_CAMERA_POWERUP_SETTLE_MS    500U
 #if ROBOT_MG90_SPEED_TEST_ENABLED && ROBOT_MG90_TEST_ANGLE_DEG > 180U

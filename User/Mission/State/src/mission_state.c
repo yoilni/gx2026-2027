@@ -248,6 +248,14 @@ void MissionTask_EnterState(MissionState state, uint32_t now)
   }
   mission_ctx.mission_snapshot.state = state;
   mission_ctx.mission_snapshot.state_entry_tick = now;
+  if (state != MISSION_STATE_S4_RAISE_FRAME &&
+      state != MISSION_STATE_S4_TRACK_FINAL_BLOCK &&
+      state != MISSION_STATE_S4_FINAL_CENTER_OBJECT)
+    mission_ctx.s4_capture_claw_open = false;
+  if (state != MISSION_STATE_S4_FINAL_CENTER_OBJECT &&
+      state != MISSION_STATE_S5_WAIT_SINGLE_GREEN &&
+      state != MISSION_STATE_S6_RECHECK_WAIT_RESULT)
+    mission_ctx.s5_casualty_timeout_check = false;
   MaixCam_SetCasualtyRegripEnabled(MissionTask_CanLatchCasualtyRegrip(state));
   if (state == MISSION_STATE_S6_BORDER_LOCATE || state == MISSION_STATE_S6_FINAL_PUSH)
     MissionTask_ResetS6BorderProgress(now);
@@ -449,7 +457,7 @@ void MissionTask_EnterState(MissionState state, uint32_t now)
       (void)DebugUart_Log("[ST] E2 TURN BACK\r\n");
       break;
     case MISSION_STATE_S4_RAISE_FRAME:
-      (void)DebugUart_Log("[ST] 24 CLAW OPEN\r\n");
+      (void)DebugUart_Log("[ST] 24 PREP TRACK\r\n");
       break;
     case MISSION_STATE_S4_TRACK_FINAL_BLOCK:
       (void)DebugUart_Log("[ST] 24 TRACK\r\n");
@@ -477,6 +485,9 @@ void MissionTask_EnterState(MissionState state, uint32_t now)
       break;
     case MISSION_STATE_S5_WAIT_SINGLE_GREEN:
       (void)DebugUart_Log("[ST] 05 WAIT\r\n");
+      break;
+    case MISSION_STATE_S5_CASUALTY_EMPTY_WIDE_SETTLE:
+      (void)DebugUart_Log("[ST] 05 RED EMPTY WIDE WAIT03\r\n");
       break;
     case MISSION_STATE_S5_ALIGN_FOR_ARRANGE:
       (void)DebugUart_Log("[ST] 05 SAFE\r\n");

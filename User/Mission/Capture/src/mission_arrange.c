@@ -58,7 +58,7 @@ void MissionTask_StartS4TrackCenterFrom04(uint32_t now)
   MissionTask_ResetVisionPid();
   MaixCam_ClearObject();
   mission_ctx.mission_snapshot.vision_target_valid = false;
-  if (Actuator_SetCameraWideView() != HAL_OK)
+  if (Actuator_SetCameraObjectTrackView() != HAL_OK)
   {
     mission_ctx.mission_snapshot.fault_flags |= MISSION_FAULT_ACTUATOR;
     MissionTask_EnterState(MISSION_STATE_FAULT, now);
@@ -79,13 +79,17 @@ void MissionTask_StartS4TrackCenterFrom04(uint32_t now)
   if (MissionTask_HandleSupplementFinish(HAL_GetTick()) || MissionTask_LoadCheckPausesMotion()) return;
   (void)DebugUart_Log("[04] TX04, ACK RX04\r\n");
   (void)DebugUart_Logf(
-      "[04] RX04 DOWN, WIDE=%u, TRACK CENTER\r\n",
-      (unsigned int)ROBOT_CAMERA_WIDE_ANGLE_DEG);
+      "[04] RX04 DOWN CAM=%u TRACK CENTER\r\n",
+      (unsigned int)ROBOT_CAMERA_OBJECT_TRACK_ANGLE_DEG);
 }
 
 bool MissionTask_CommandS4VisionTracking(uint32_t now,
                                                  bool *xy_in_tolerance)
 {
+  const bool claw_approach =
+      mission_ctx.mission_snapshot.state == MISSION_STATE_S4_TRACK_CENTER ||
+      mission_ctx.mission_snapshot.state == MISSION_STATE_S4_TRACK_FINAL_BLOCK ||
+      mission_ctx.mission_snapshot.state == MISSION_STATE_SUPPLEMENT_TRACK;
   bool final_track =
       mission_ctx.mission_snapshot.state == MISSION_STATE_S4_TRACK_FINAL_BLOCK ||
       mission_ctx.mission_snapshot.state == MISSION_STATE_S4_FINE32_TRACK ||
@@ -117,7 +121,10 @@ bool MissionTask_CommandS4VisionTracking(uint32_t now,
 
   if (!mission_ctx.mission_snapshot.vision_target_valid)
   {
-    MissionTask_StopWheels();
+    if (claw_approach)
+      MissionTask_CommandClawApproach(now, turn_max_rpm, forward_max_rpm, wheel_max_rpm);
+    else
+      MissionTask_StopWheels();
     /* Keep the pixel PID history until an actual recovery/task change. */
     if ((int32_t)(now - mission_ctx.s4_next_debug_tick) >= 0)
     {
@@ -133,39 +140,27 @@ bool MissionTask_CommandS4VisionTracking(uint32_t now,
   x_in_tolerance = absolute_x_error <= ROBOT_VISION_X_TOLERANCE_PX;
   y_in_tolerance = absolute_y_error <= ROBOT_VISION_Y_TOLERANCE_PX;
 
-  turn_rpm = x_in_tolerance
-                 ? 0
-                 : MissionTask_CalculateVisionTurn(
-                       now, mission_ctx.mission_snapshot.vision_x_error_px);
-  forward_rpm = MissionTask_CalculateVisionForward(
-      now, mission_ctx.mission_snapshot.vision_y_error_px);
-
-  if (turn_rpm > turn_max_rpm)
+  if (claw_approach)
   {
-    turn_rpm = turn_max_rpm;
-  }
-  else if (turn_rpm < -turn_max_rpm)
-  {
-    turn_rpm = -turn_max_rpm;
-  }
-  if (forward_rpm > forward_max_rpm)
-  {
-    forward_rpm = forward_max_rpm;
-  }
-  else if (forward_rpm < -forward_max_rpm)
-  {
-    forward_rpm = -forward_max_rpm;
-  }
-
-  mission_ctx.mission_snapshot.vision_turn_rpm = turn_rpm;
-  mission_ctx.mission_snapshot.vision_forward_rpm = forward_rpm;
-  if (x_in_tolerance && y_in_tolerance)
-  {
-    MissionTask_StopWheels();
+    MissionTask_CommandClawApproach(now, turn_max_rpm, forward_max_rpm, wheel_max_rpm);
+    turn_rpm = mission_ctx.mission_snapshot.vision_turn_rpm;
+    forward_rpm = mission_ctx.mission_snapshot.vision_forward_rpm;
   }
   else
   {
-    MissionTask_SetVisionTrackingTargets(forward_rpm, turn_rpm, wheel_max_rpm);
+    turn_rpm = x_in_tolerance
+        ? 0 : MissionTask_CalculateVisionTurn(now, mission_ctx.mission_snapshot.vision_x_error_px);
+    forward_rpm = MissionTask_CalculateVisionForward(now, mission_ctx.mission_snapshot.vision_y_error_px);
+
+    if (turn_rpm > turn_max_rpm) turn_rpm = turn_max_rpm;
+    else if (turn_rpm < -turn_max_rpm) turn_rpm = -turn_max_rpm;
+    if (forward_rpm > forward_max_rpm) forward_rpm = forward_max_rpm;
+    else if (forward_rpm < -forward_max_rpm) forward_rpm = -forward_max_rpm;
+
+    mission_ctx.mission_snapshot.vision_turn_rpm = turn_rpm;
+    mission_ctx.mission_snapshot.vision_forward_rpm = forward_rpm;
+    if (x_in_tolerance && y_in_tolerance) MissionTask_StopWheels();
+    else MissionTask_SetVisionTrackingTargets(forward_rpm, turn_rpm, wheel_max_rpm);
   }
 
   if (xy_in_tolerance != NULL)
@@ -1797,8 +1792,8 @@ void MissionTask_RunS4Arrange(uint32_t now)
       break;
 
     case MISSION_STATE_S4_RAISE_FRAME:
-      /* The claw-open command is already issued. No servo wait; preserve a
-         one-shot34 that arrives before the next tracking dispatch. */
+      /* Keep the claw closed here. Preserve a one-shot34 that arrives before
+         the next tracking dispatch; the capture flow opens it if needed. */
       if (mission_ctx.s4_final_mode_already_active &&
           MaixCam_TakeEvent(&event_code))
       {
@@ -1831,7 +1826,7 @@ void MissionTask_RunS4Arrange(uint32_t now)
       mission_ctx.s4_final_event34_pending = false;
       if (camera_already_in_final_mode)
       {
-        /* Keep new24 coordinates received after the claw-open command. */
+        /* Keep new24 coordinates received during the capture handoff. */
         MissionTask_ResetVisionControllerState();
         mission_ctx.s4_next_debug_tick = now;
         MissionTask_EnterState(MISSION_STATE_S4_TRACK_FINAL_BLOCK, now);
@@ -1855,7 +1850,7 @@ void MissionTask_RunS4Arrange(uint32_t now)
       if (camera_already_in_final_mode)
       {
         (void)DebugUart_Log(
-            "[24] CLAW OPEN TRACK\r\n");
+            "[24] TRACK WAIT NEAR TO OPEN\r\n");
       }
       else
       {
@@ -1877,6 +1872,7 @@ void MissionTask_RunS4Arrange(uint32_t now)
             "[24] RX%02X, WAIT34\r\n",
             (unsigned int)event_code);
       }
+      if (MissionTask_HoldS4ClawOpening(now)) return;
       const CaptureTrackStatus status = CaptureFlow_Track(now, mission_ctx.mission_snapshot.state_entry_tick,
           mission_ctx.mission_snapshot.vision_target_valid, &mission_ctx.s4_final_missing_since,
           MissionTask_CommandS4VisionTracking);

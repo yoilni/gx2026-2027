@@ -5,9 +5,9 @@
 #include "mission_vision.h"
 #include "mission_supplement.h"
 #include "mission_safe_zone.h"
+#include "mission_capture.h"
 
 #include "actuator_task.h"
-#include "capture_flow.h"
 #include "debug_uart_task.h"
 #include "maixcam_task.h"
 #include "robot_config.h"
@@ -133,13 +133,7 @@ static void MissionTask_StartBlackFinalTrack(uint32_t now)
   mission_ctx.s4_final_turn_stable_since = 0U;
   mission_ctx.s4_final_recovery_count = 0U;
 
-  if (CaptureFlow_Open(Actuator_SetCameraWideView, Actuator_SetClawAngle,
-      ROBOT_CLAW_MATERIAL_CAPTURE_OPEN_DEG) != HAL_OK)
-  {
-    mission_ctx.mission_snapshot.fault_flags |= MISSION_FAULT_ACTUATOR;
-    MissionTask_EnterState(MISSION_STATE_FAULT, now);
-    return;
-  }
+  if (!MissionTask_PrepareS4CapturePose(now)) return;
   if (MaixCam_SendCommand(MAIXCAM_COMMAND_SELECT_BLACK) != HAL_OK)
   {
     mission_ctx.mission_snapshot.fault_flags |= MISSION_FAULT_VISION_TX;
@@ -147,12 +141,11 @@ static void MissionTask_StartBlackFinalTrack(uint32_t now)
     return;
   }
 
-  /* The next dispatch sends24 without waiting for the claw to settle. */
+  /* The next dispatch sends24; the claw stays closed until capture range. */
   MissionTask_EnterState(MISSION_STATE_S4_RAISE_FRAME, now);
   (void)DebugUart_Logf(
-      "[07-B] TX31 cam=%u claw=%u >TX24 SKIP03/04\r\n",
-      (unsigned int)ROBOT_CAMERA_WIDE_ANGLE_DEG,
-      (unsigned int)ROBOT_CLAW_MATERIAL_CAPTURE_OPEN_DEG);
+      "[07-B] TX31 cam=%u claw=CLOSED >TX24 SKIP03/04\r\n",
+      (unsigned int)ROBOT_CAMERA_FINAL_TRACK_ANGLE_DEG);
 }
 
 void MissionTask_SwitchS7ToBlackGreen(uint32_t now)

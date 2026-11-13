@@ -7,6 +7,7 @@
 #include "mission_supplement.h"
 #include "mission_safe_zone.h"
 
+#include "M2006.h"
 #include "actuator_task.h"
 #include "capture_flow.h"
 #include "debug_uart_task.h"
@@ -35,36 +36,103 @@ uint8_t MissionTask_GetCarriedObjectId(void)
                                    : MissionTask_GetSelectedObjectId();
 }
 
-void MissionTask_SkipToS4FinalTrack(uint32_t now)
+bool MissionTask_PrepareS4CapturePose(uint32_t now)
 {
-  const bool casualty = MissionTask_GetSelectedObjectId() == 4U;
-  const uint16_t open_deg = casualty
-      ? ROBOT_CLAW_CASUALTY_CAPTURE_OPEN_DEG : ROBOT_CLAW_MATERIAL_CAPTURE_OPEN_DEG;
-  mission_ctx.s4_arrange_cycle_count = 0U;
   MissionTask_StopWheels();
-  MaixCam_ClearObject();
-  MissionTask_ResetVisionPid();
-  mission_ctx.mission_snapshot.vision_target_valid = false;
-  if (CaptureFlow_Open(casualty ? Actuator_SetCameraFinalTrackView : Actuator_SetCameraWideView,
+  mission_ctx.s4_capture_claw_open = false;
+  if (Actuator_SetCameraFinalTrackView() == HAL_OK && Actuator_SetClawClosed() == HAL_OK)
+    return true;
+  mission_ctx.mission_snapshot.fault_flags |= MISSION_FAULT_ACTUATOR;
+  MissionTask_EnterState(MISSION_STATE_FAULT, now);
+  return false;
+}
+
+static bool MissionTask_OpenS4CaptureClaw(uint32_t now)
+{
+  const uint16_t open_deg = MissionTask_GetSelectedObjectId() == 4U
+      ? ROBOT_CLAW_CASUALTY_CAPTURE_OPEN_DEG : ROBOT_CLAW_MATERIAL_CAPTURE_OPEN_DEG;
+  if (CaptureFlow_Open(Actuator_SetCameraFinalTrackView,
       Actuator_SetClawAngle, open_deg) != HAL_OK)
   {
     mission_ctx.mission_snapshot.fault_flags |= MISSION_FAULT_ACTUATOR;
     MissionTask_EnterState(MISSION_STATE_FAULT, now);
-    return;
+    return false;
   }
+  mission_ctx.s4_capture_claw_open = true;
+  mission_ctx.s4_capture_claw_open_tick = now;
+  (void)DebugUart_Logf("[24] OPEN=%u WAIT=%lu\r\n", (unsigned int)open_deg,
+      (unsigned long)ROBOT_S4_CAPTURE_CLAW_OPEN_SETTLE_MS);
+  return true;
+}
 
+static bool MissionTask_S4ClawIsOpening(uint32_t now)
+{
+  return mission_ctx.s4_capture_claw_open &&
+      (uint32_t)(now - mission_ctx.s4_capture_claw_open_tick) < ROBOT_S4_CAPTURE_CLAW_OPEN_SETTLE_MS;
+}
+
+bool MissionTask_HoldS4ClawOpening(uint32_t now)
+{
+  if (!MissionTask_S4ClawIsOpening(now))
+  {
+    if (mission_ctx.s4_capture_claw_open ||
+        (uint32_t)(now - mission_ctx.mission_snapshot.state_entry_tick) >= ROBOT_S4_FINAL_TRACK_RETRY_MS ||
+        !mission_ctx.mission_snapshot.vision_target_valid ||
+        (mission_ctx.mission_snapshot.target_geometry & MAIXCAM_OBJECT_GEOMETRY_OPEN_AREA) == 0U ||
+        VisionMotion_ClawRetreatActive(&mission_ctx.vision_motion.claw))
+      return false;
+    if (mission_ctx.mission_snapshot.target_age_ms <= ROBOT_VISION_COORD_DECEL_START_MS)
+    {
+      if (MissionTask_Abs32(mission_ctx.mission_snapshot.vision_x_error_px) > ROBOT_VISION_X_TOLERANCE_PX)
+      {
+        /* In the final opening window, the 20px straight-drive hysteresis
+           must not let a still-closed claw continue forward off center. */
+        mission_ctx.vision_motion.claw.aligned = false;
+        return false;
+      }
+      MissionTask_StopWheels();
+      if (MissionTask_Abs32(moto_chassis[MISSION_LEFT_MOTOR_INDEX].speed_rpm) <= ROBOT_VISION_CLAW_STOP_MOTOR_RPM &&
+          MissionTask_Abs32(moto_chassis[MISSION_RIGHT_MOTOR_INDEX].speed_rpm) <= ROBOT_VISION_CLAW_STOP_MOTOR_RPM)
+        (void)MissionTask_OpenS4CaptureClaw(now);
+    }
+  }
+  MissionTask_StopWheels();
+  mission_ctx.mission_snapshot.vision_forward_rpm = 0;
+  mission_ctx.mission_snapshot.vision_turn_rpm = 0;
+  return true;
+}
+
+void MissionTask_SkipToS4FinalTrack(uint32_t now)
+{
+  mission_ctx.s4_arrange_cycle_count = 0U;
+  MaixCam_ClearObject();
+  MissionTask_ResetVisionPid();
+  mission_ctx.mission_snapshot.vision_target_valid = false;
+  if (!MissionTask_PrepareS4CapturePose(now)) return;
   mission_ctx.s4_final_mode_already_active = true;
   mission_ctx.s4_final_event34_pending = false;
   MissionTask_EnterState(MISSION_STATE_S4_RAISE_FRAME, now);
-  (void)DebugUart_Logf("[24] RX24 CAM=%u CLAW=%u >TRACK\r\n",
-      (unsigned int)(casualty ? ROBOT_CAMERA_FINAL_TRACK_ANGLE_DEG
-                             : ROBOT_CAMERA_WIDE_ANGLE_DEG),
-      (unsigned int)open_deg);
+  (void)DebugUart_Logf("[24] RX24 CAM=%u CLAW CLOSED >TRACK\r\n",
+      (unsigned int)ROBOT_CAMERA_FINAL_TRACK_ANGLE_DEG);
 }
 
 void MissionTask_FinishS4Capture(uint32_t now)
 {
   mission_ctx.mission_snapshot.vision_forward_rpm = 0;
+  mission_ctx.mission_snapshot.vision_turn_rpm = 0;
+  /* A qualified capture event also certifies center + area, even if no
+     steering frame arrived before it. Stop and give the claw time to open. */
+  if (!mission_ctx.s5_casualty_timeout_check && !mission_ctx.s4_capture_claw_open)
+  {
+    MissionTask_StopWheels();
+    if (!MissionTask_OpenS4CaptureClaw(now)) return;
+  }
+  if (MissionTask_S4ClawIsOpening(now))
+  {
+    MissionTask_StopWheels();
+    MissionTask_EnterState(MISSION_STATE_S4_FINAL_CENTER_OBJECT, now);
+    return;
+  }
   const CaptureFlow_Result result = CaptureFlow_Close(MissionTask_StopWheels,
       Actuator_ClawCloseDeferred, Actuator_SetClawClosed);
   if (result == CAPTURE_RUNNING)
@@ -76,6 +144,12 @@ void MissionTask_FinishS4Capture(uint32_t now)
   {
     mission_ctx.mission_snapshot.fault_flags |= MISSION_FAULT_ACTUATOR;
     MissionTask_EnterState(MISSION_STATE_FAULT, now);
+    return;
+  }
+  if (mission_ctx.s5_casualty_timeout_check)
+  {
+    (void)DebugUart_Log("[24] RED TMO CLOSED >05 CHECK\r\n");
+    MissionTask_EnterS5(now);
     return;
   }
   const uint8_t captured_id = MissionTask_GetSelectedObjectId();
@@ -111,15 +185,21 @@ void MissionTask_FinishS4Capture(uint32_t now)
       (unsigned int)ROBOT_CLAW_CLOSED_DEG, (long)mission_ctx.mission_snapshot.safe_zone_yaw_target_cdeg);
 }
 
-void MissionTask_CaptureS4From34(uint32_t now)
+static void MissionTask_BeginS4Close(uint32_t now, bool check_after_timeout)
 {
-  /* Both cargo classes stop and close at the visual capture point. */
+  mission_ctx.s5_casualty_timeout_check = check_after_timeout;
   MissionTask_ResetVisionPid();
   MaixCam_ClearObject();
   mission_ctx.mission_snapshot.vision_target_valid = false;
   mission_ctx.s4_final_missing_since = 0U;
   mission_ctx.s4_final_event34_pending = false;
   MissionTask_FinishS4Capture(now);
+}
+
+void MissionTask_CaptureS4From34(uint32_t now)
+{
+  /* Both cargo classes stop and close at the visual capture point. */
+  MissionTask_BeginS4Close(now, false);
 }
 
 void MissionTask_StartS4FinalRecovery(uint32_t now)
@@ -142,6 +222,12 @@ void MissionTask_StartS4FinalRecovery(uint32_t now)
         "[EE] GREEN LOST2 KEEP21 >REC24\r\n");
   }
   MissionTask_StopWheels();
+  if (mission_ctx.s4_capture_claw_open && Actuator_SetClawClosed() != HAL_OK)
+  {
+    mission_ctx.mission_snapshot.fault_flags |= MISSION_FAULT_ACTUATOR;
+    MissionTask_EnterState(MISSION_STATE_FAULT, now);
+    return;
+  }
   MissionTask_ResetVisionPid();
   mission_ctx.s4_final_turn_stable_since = 0U;
   mission_ctx.s4_final_first_yaw_cdeg = MissionTask_WrapYaw(
@@ -264,7 +350,7 @@ void MissionTask_RetryS3AfterS4(uint32_t now, bool from_arrange02)
   if (MissionTask_HandleSupplementFinish(now) || MissionTask_LoadCheckPausesMotion()) return;
   if (from_arrange02 && Actuator_ClawCloseDeferred() != 0U) return;
   if ((from_arrange02 ? Actuator_SetClawClosed() : Actuator_SetFrameLowered()) != HAL_OK ||
-      Actuator_SetCameraObjectTrackView() != HAL_OK)
+      (!from_arrange02 && Actuator_SetCameraObjectTrackView() != HAL_OK))
   {
     mission_ctx.mission_snapshot.fault_flags |= MISSION_FAULT_ACTUATOR;
     MissionTask_EnterState(MISSION_STATE_FAULT, now);
@@ -321,6 +407,12 @@ void MissionTask_RetryS3AfterS4(uint32_t now, bool from_arrange02)
 void MissionTask_HandleS4FinalTrackTimeout(uint32_t now)
 {
   uint8_t selected_id = MissionTask_GetSelectedObjectId();
+  if (selected_id == 4U)
+  {
+    /* A red object may be hidden by the claw just before the visual34. */
+    MissionTask_BeginS4Close(now, true);
+    return;
+  }
   if (selected_id != 3U && selected_id != 5U && selected_id != 6U &&
       mission_ctx.s3_target_select_command != MAIXCAM_COMMAND_SELECT_BLACK_GREEN)
   {

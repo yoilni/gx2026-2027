@@ -67,6 +67,133 @@ bool VisionMotion_IsObjectProfile(VisionMotion_Profile profile)
          profile == VISION_MOTION_FINAL;
 }
 
+enum { CLAW_RETREAT_IDLE, CLAW_RETREAT_DRIVE, CLAW_RETREAT_BRAKE, CLAW_RETREAT_FRESH };
+
+bool VisionMotion_ClawRetreatActive(const VisionMotion_ClawApproach *approach)
+{
+  return approach->retreat_phase != CLAW_RETREAT_IDLE;
+}
+
+VisionMotion_ClawDrive VisionMotion_ClawApproachStep(VisionMotion_ClawApproach *approach,
+    VisionMotion_Profile profile, const VisionMotion_Frame *frame, uint32_t now,
+    int16_t x_error, int16_t y_error, bool wheels_stopped)
+{
+  const bool valid = frame->valid && frame->age_ms < frame->timeout_ms;
+  if (approach->context != frame->context ||
+      (valid && approach->target_id != frame->target_id))
+  {
+    *approach = (VisionMotion_ClawApproach){.context = frame->context, .target_id = frame->target_id};
+  }
+  if (!valid)
+  {
+    approach->aligned = false;
+    approach->last_drive = VISION_CLAW_HOLD;
+    if (approach->retreat_phase == CLAW_RETREAT_DRIVE)
+      approach->retreat_phase = CLAW_RETREAT_BRAKE;
+    return VISION_CLAW_HOLD;
+  }
+
+  if (approach->retreat_phase == CLAW_RETREAT_DRIVE)
+  {
+    if ((uint32_t)(now - approach->phase_tick) < ROBOT_VISION_CLAW_BACKOFF_MS)
+      return VISION_CLAW_BACKOFF;
+    approach->retreat_phase = CLAW_RETREAT_BRAKE;
+    approach->last_drive = VISION_CLAW_HOLD;
+    return VISION_CLAW_HOLD;
+  }
+  if (approach->retreat_phase == CLAW_RETREAT_BRAKE)
+  {
+    if (wheels_stopped)
+    {
+      approach->phase_tick = now;
+      approach->resume_after_sequence = frame->sequence;
+      approach->retreat_phase = CLAW_RETREAT_FRESH;
+    }
+    return VISION_CLAW_HOLD;
+  }
+  if (approach->retreat_phase == CLAW_RETREAT_FRESH)
+  {
+    if (!wheels_stopped || frame->sequence == approach->resume_after_sequence ||
+        (int32_t)((now - frame->age_ms) - approach->phase_tick) < 0)
+      return VISION_CLAW_HOLD;
+    approach->retreat_phase = CLAW_RETREAT_IDLE;
+  }
+
+  const int32_t x = x_error < 0 ? -(int32_t)x_error : x_error;
+  const int32_t forward_error = (int32_t)y_error * ROBOT_VISION_Y_FORWARD_SIGN;
+  const int32_t align_limit = profile == VISION_MOTION_SEARCH ? ROBOT_VISION_CLAW_ALIGN_03_PX :
+      profile == VISION_MOTION_CENTER ? ROBOT_VISION_CLAW_ALIGN_04_PX : ROBOT_VISION_CLAW_ALIGN_24_PX;
+  /* Once near, stay in the guarded approach for this target and phase.
+     The short backoff itself must not reactivate the XY steering mode. */
+  if (!approach->near_mode && !frame->area_near && !frame->area_open && forward_error > align_limit)
+  {
+    approach->last_drive = VISION_CLAW_FAR_TRACK;
+    return VISION_CLAW_FAR_TRACK;
+  }
+  approach->near_mode = true;
+  const int32_t near_limit = profile == VISION_MOTION_SEARCH ? ROBOT_VISION_CLAW_NEAR_03_PX :
+      profile == VISION_MOTION_CENTER ? ROBOT_VISION_CLAW_NEAR_04_PX : ROBOT_VISION_CLAW_NEAR_24_PX;
+  const bool closed_at_target = frame->claw_closed && frame->area_open;
+  const bool too_close = frame->area_open || forward_error <= near_limit;
+  const bool strict_center = frame->claw_closed && (frame->area_near || frame->area_open);
+  const int32_t x_limit = approach->aligned && !strict_center ? ROBOT_VISION_CLAW_REALIGN_X_PX :
+      ROBOT_VISION_X_TOLERANCE_PX;
+  approach->aligned = x <= x_limit;
+  const VisionMotion_ClawDrive drive = approach->aligned
+      ? (closed_at_target ? VISION_CLAW_HOLD : VISION_CLAW_STRAIGHT)
+      : (!approach->backoff_used && too_close ? VISION_CLAW_BACKOFF : VISION_CLAW_ALIGN);
+
+  /* Do not mix translation and yaw while the chassis is still braking. */
+  if ((drive != approach->last_drive && !wheels_stopped) ||
+      (drive == VISION_CLAW_BACKOFF && frame->age_ms > ROBOT_VISION_COORD_DECEL_START_MS))
+  {
+    approach->last_drive = VISION_CLAW_HOLD;
+    return VISION_CLAW_HOLD;
+  }
+  approach->last_drive = (uint8_t)drive;
+  if (drive == VISION_CLAW_BACKOFF)
+  {
+    approach->backoff_used = true;
+    approach->phase_tick = now;
+    approach->retreat_phase = CLAW_RETREAT_DRIVE;
+  }
+  else if (drive == VISION_CLAW_STRAIGHT && !frame->area_near &&
+           forward_error > near_limit + ROBOT_VISION_CLAW_REARM_MARGIN_PX)
+  {
+    approach->backoff_used = false;
+  }
+  return drive;
+}
+
+void VisionMotion_ClawResetHeading(VisionMotion_ClawApproach *approach)
+{
+  approach->heading_latched = false;
+  approach->heading_pid = (HeadingControl_State){0};
+}
+
+int16_t VisionMotion_ClawHoldHeading(VisionMotion_ClawApproach *approach, uint32_t now,
+    int32_t yaw_cdeg, uint32_t initial_period_ms)
+{
+  if (!approach->heading_latched)
+  {
+    approach->heading_cdeg = yaw_cdeg;
+    approach->heading_latched = true;
+  }
+  const int32_t error = HeadingControl_YawError(approach->heading_cdeg, yaw_cdeg);
+  if (error >= -ROBOT_VISION_CLAW_YAW_DEADBAND_CDEG && error <= ROBOT_VISION_CLAW_YAW_DEADBAND_CDEG)
+  {
+    approach->heading_pid = (HeadingControl_State){0};
+    return 0;
+  }
+  const HeadingControl_Config config = {
+    .kp = ROBOT_VISION_CLAW_YAW_KP, .ki = ROBOT_VISION_CLAW_YAW_KI,
+    .kd = ROBOT_VISION_CLAW_YAW_KD, .integral_limit = ROBOT_VISION_CLAW_YAW_I_LIMIT,
+    .output_scale = 1.0f, .min_turn_rpm = 0.0f, .max_turn_rpm = ROBOT_VISION_CLAW_YAW_MAX_RPM,
+    .initial_period_ms = initial_period_ms, .yaw_left_sign = ROBOT_YAW_LEFT_SIGN,
+  };
+  return HeadingControl_Update(&approach->heading_pid, &config, now, error);
+}
+
 int16_t VisionMotion_CalculateTurn(VisionMotion_Axis *axis, VisionMotion_Profile profile,
     uint32_t now, uint32_t sequence, int16_t error_px, uint32_t initial_period_ms)
 {

@@ -127,6 +127,8 @@ typedef struct
   bool ae_ack_completed;
   bool s4_final_mode_already_active;
   bool s4_final_event34_pending;
+  bool s4_capture_claw_open;
+  uint32_t s4_capture_claw_open_tick;
   bool s4_e4_recovery_used;
   /* Red E4 shares the E3 sweep after facing away from the mapped safe zone. */
   bool s4_red_e4_align_away_active;
@@ -155,6 +157,8 @@ typedef struct
   int32_t s4_arrange_recovery_left_yaw_cdeg;
   int32_t s4_arrange_recovery_right_yaw_cdeg;
   bool s5_close_view_active;
+  bool s5_arrange_backing;
+  bool s5_casualty_timeout_check;
   bool s5_casualty_adjust_active;
   bool s5_casualty_adjust_done;
   bool s5_recheck_resume_supplement;

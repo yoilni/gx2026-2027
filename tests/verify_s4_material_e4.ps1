@@ -157,10 +157,12 @@ static bool MissionTask_HandleSupplementFinish(uint32_t t) { (void)t;return fals
 static bool MissionTask_LoadCheckPausesMotion(void) { return false; }
 static bool MissionTask_HandleLoadCheckRequest(uint32_t now) { (void)now;return false; }
 static void MissionTask_DebugS3(uint32_t now) { (void)now; }
-static int16_t MissionTask_CalculateVisionForward(uint32_t t,int16_t e) { (void)t;(void)e;return 70; }
-static int16_t MissionTask_CalculateVisionTurn(uint32_t t,int16_t e) { (void)t;(void)e;return 7; }
-static void MissionTask_SetVisionTrackingTargets(int16_t f,int16_t r,int16_t cap) {
-  (void)cap;MissionTask_SetWheelTargets(f+r,f-r);
+static void MissionTask_CommandClawApproach(uint32_t now,int16_t turn,int16_t forward,int16_t wheel) {
+  (void)now;(void)turn;(void)forward;(void)wheel;
+  /* Protocol fixture: indicate that the admitted fresh coordinate drove tracking.
+     Real wheel selection is exercised by verify_supplement_capture. */
+  if(!mission_snapshot.vision_target_valid) MissionTask_StopWheels();
+  else MissionTask_SetWheelTargets(70,70);
 }
 static void MissionTask_SwitchS7ToBlackGreen(uint32_t t) { (void)t;assert(false); }
 static bool MissionTask_CommandS4VisionTracking(uint32_t now,bool *arrived) {

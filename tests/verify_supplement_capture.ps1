@@ -29,7 +29,7 @@ $names = @('MissionTask_GetVisionMotionProfile', 'MissionTask_S7MaterialOnly', '
   'MissionTask_SendSupplementCommand', 'MissionTask_StartSupplement', 'MissionTask_HandleSupplementControl',
   'MissionTask_StartSupplementRecovery', 'MissionTask_ResumeSupplement', 'MissionTask_RunSupplement',
   'MissionTask_GuardVisionForward', 'MissionTask_CalculateVisionForward', 'MissionTask_CalculateVisionTurn', 'MissionTask_SetTrackingTargets',
-  'MissionTask_VisionAgeScale', 'MissionTask_SetVisionTrackingTargets', 'MissionTask_CommandS4VisionTracking',
+  'MissionTask_VisionAgeScale', 'MissionTask_SetVisionTrackingTargets', 'MissionTask_CommandClawApproach', 'MissionTask_CommandS4VisionTracking',
   'MissionTask_CalculateS6YawPid', 'MissionTask_CalculateS6YawTurn', 'MissionTask_RunS6TurnToHeading',
   'MissionTask_CheckRunningHealth', 'MissionTask_HandleRedPriorityRequest')
 $names += @('MissionTask_ReportS6SearchSoftTimeout', 'MissionTask_RunS6SearchSafeZone',
@@ -44,6 +44,9 @@ $names += @('MissionTask_CanPauseForLoadCheck', 'MissionTask_HandleLoadCheckRequ
   'MissionTask_WaitFinalLoadCheck', 'MissionTask_LoadCheckPausesMotion', 'MissionTask_CanLatchCasualtyRegrip')
 $names += @('MissionTask_StartS4TrackCenterFrom04', 'MissionTask_AckS4Center',
   'MissionTask_SkipToS4FinalTrack', 'MissionTask_CaptureS4From34', 'MissionTask_FinishS4Capture',
+  'MissionTask_PrepareS4CapturePose', 'MissionTask_OpenS4CaptureClaw', 'MissionTask_S4ClawIsOpening',
+  'MissionTask_HoldS4ClawOpening',
+  'MissionTask_BeginS4Close',
   'MissionTask_TryResumeS4FinalRecovery', 'MissionTask_EndSupplementRun',
   'MissionTask_RetryS3AfterS4', 'MissionTask_StartS5Arrange02',
   'MissionTask_HandleS4FinalTrackTimeout',
@@ -102,11 +105,14 @@ typedef void *osMutexId_t;
 typedef enum { GPIO_PIN_RESET, GPIO_PIN_SET } GPIO_PinState;
 #define MISSION_TASK_PERIOD_TICKS 20U
 #define MISSION_VISION_TARGET_TIMEOUT_MS MAIXCAM_DATA_TIMEOUT_MS
+#define MISSION_LEFT_MOTOR_INDEX (ROBOT_LEFT_WHEEL_MOTOR_ID - 1U)
+#define MISSION_RIGHT_MOTOR_INDEX (ROBOT_RIGHT_WHEEL_MOTOR_ID - 1U)
 uint32_t fake_now;
 unsigned fake_rx_arms;
 '@
 $stubs = @'
 static UART_HandleTypeDef uart;
+static struct { int16_t speed_rpm; } moto_chassis[4];
 static unsigned stops, wide_calls, track_view_calls, safe_view_calls, near_calls, frame_raise_calls, frame_partial_calls, frame_lower_calls, rx_bytes, tx_count, uart_inits;
 static unsigned claw_close_calls, nonzero_wheel_requests;
 static unsigned baffle_stop_calls;
@@ -131,9 +137,12 @@ static uint32_t health_faults;
 static void byte(uint8_t b) {
   ++rx_bytes; maixcam_rx_byte=b; MaixCam_UART_RxCpltCallback(maixcam_uart);
 }
-static void rx(uint8_t cmd) {
+static void rx_wire(uint8_t cmd) {
   const uint8_t f[]={0xF1,0xF2,cmd,0x1F,0x2F};
   for(unsigned i=0;i<sizeof(f);++i) byte(f[i]);
+}
+static void rx(uint8_t cmd) {
+  rx_wire(cmd==0x34 ? MAIXCAM_EVENT_GEOMETRY_CAPTURE : cmd);
 }
 static void coords(uint8_t id,uint16_t x,uint16_t y) {
   const uint8_t f[]={0xF1,0xF2,id,x>>8,x&255,1,y>>8,y&255,2,0x1F,0x2F};
@@ -260,6 +269,10 @@ static void MissionTask_EnterState(MissionState state,uint32_t now) {
     s5_casualty_adjust_active=s5_casualty_adjust_done=false;
   }
   mission_snapshot.state=state; mission_snapshot.state_entry_tick=now;
+  if(state!=MISSION_STATE_S4_RAISE_FRAME && state!=MISSION_STATE_S4_TRACK_FINAL_BLOCK &&
+      state!=MISSION_STATE_S4_FINAL_CENTER_OBJECT) s4_capture_claw_open=false;
+  if(state!=MISSION_STATE_S4_FINAL_CENTER_OBJECT && state!=MISSION_STATE_S5_WAIT_SINGLE_GREEN &&
+      state!=MISSION_STATE_S6_RECHECK_WAIT_RESULT) s5_casualty_timeout_check=false;
   MaixCam_SetCasualtyRegripEnabled(MissionTask_CanLatchCasualtyRegrip(state));
   if(state<MISSION_STATE_S4_FINE32_TRACK || state>MISSION_STATE_S4_FINE42_FINISH_TURN_LEFT)
     s4_initial_green02_active=false;

@@ -26,6 +26,8 @@ void MissionTask_SetTrackingTargets(int16_t forward_rpm,
 void MissionTask_SetVisionTrackingTargets(int16_t forward_rpm,
                                                 int16_t turn_rpm,
                                                 int16_t wheel_max_rpm);
+void MissionTask_CommandClawApproach(uint32_t now, int16_t turn_limit,
+                                    int16_t forward_limit, int16_t wheel_limit);
 void MissionTask_RunS3Track(uint32_t now);
 void MissionTask_RunS3LowerFrame(uint32_t now);
 bool MissionTask_CanAvoidStartZone(void);

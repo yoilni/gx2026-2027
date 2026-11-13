@@ -567,7 +567,7 @@ static void verify_s4_push_trial(void)
   for(unsigned i=0;i<5;++i) {
     fine_setup();MissionTask_StartS4PushTrial(100,true);
     MissionTask_EnterState(legs[i],100);fake_now=120;rx(0x24);fine_tick(120);
-    assert(mission_snapshot.state==MISSION_STATE_S4_RAISE_FRAME && claw_open_calls==1 && claw_angle==ROBOT_CLAW_MATERIAL_CAPTURE_OPEN_DEG);
+    assert(mission_snapshot.state==MISSION_STATE_S4_RAISE_FRAME && !claw_open_calls && claw_angle==ROBOT_CLAW_CLOSED_DEG);
     assert(!frame_partial_calls);
     assert(!tx_count && !maixcam_fine_arrange_active && !mission_snapshot.left_target_rpm);
     fine_setup();MissionTask_StartS4PushTrial(100,true);
